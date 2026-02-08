@@ -98,7 +98,7 @@ function normalizePriceFromString(value: string): number | null {
   return Number.isNaN(num) || num < 0 ? null : num;
 }
 
-function firstText($: cheerio.CheerioAPI, selectors: string[], root: cheerio.Cheerio<Element>): string | undefined {
+function firstText($: cheerio.CheerioAPI, selectors: string[], root: cheerio.Cheerio<any>): string | undefined {
   const el = root.length ? root : $.root();
   for (const sel of selectors) {
     try {
@@ -113,7 +113,7 @@ function firstText($: cheerio.CheerioAPI, selectors: string[], root: cheerio.Che
   return undefined;
 }
 
-function firstAttr($: cheerio.CheerioAPI, selectors: string[], attr: string, root: cheerio.Cheerio<Element>): string | undefined {
+function firstAttr($: cheerio.CheerioAPI, selectors: string[], attr: string, root: cheerio.Cheerio<any>): string | undefined {
   const el = root.length ? root : $.root();
   for (const sel of selectors) {
     try {
@@ -153,8 +153,8 @@ export function extractProductsHeuristic(html: string, pageUrl: string): Array<P
   return results;
 }
 
-function findProductCards($: cheerio.CheerioAPI): cheerio.Cheerio<Element>[] {
-  const out: cheerio.Cheerio<Element>[] = [];
+function findProductCards($: cheerio.CheerioAPI): cheerio.Cheerio<any>[] {
+  const out: cheerio.Cheerio<any>[] = [];
   for (const sel of PRODUCT_CARD_SELECTORS) {
     const nodes = $(sel);
     if (nodes.length > 0) {
@@ -169,7 +169,7 @@ function findProductCards($: cheerio.CheerioAPI): cheerio.Cheerio<Element>[] {
 
 function extractProductFromCard(
   $: cheerio.CheerioAPI,
-  card: cheerio.Cheerio<Element>,
+  card: cheerio.Cheerio<any>,
   pageUrl: string
 ): (Product & { confidenceScore: number }) | null {
   const name = firstText($, NAME_SELECTORS, card);

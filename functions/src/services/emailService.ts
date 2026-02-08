@@ -54,7 +54,7 @@ let cachedTransporter: Transporter | null = null;
 export function getTransporter(config?: SmtpConfig): Transporter {
   if (cachedTransporter) return cachedTransporter;
   const cfg = config ?? getSmtpConfigFromEnv();
-  cachedTransporter = nodemailer.createTransport({
+  const transporter = nodemailer.createTransport({
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure ?? cfg.port === 465,
@@ -63,7 +63,8 @@ export function getTransporter(config?: SmtpConfig): Transporter {
         ? { user: cfg.user, pass: cfg.pass }
         : undefined,
   });
-  return cachedTransporter;
+  cachedTransporter = transporter;
+  return transporter;
 }
 
 /**
