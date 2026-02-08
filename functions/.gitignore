@@ -1,0 +1,23 @@
+# Compilado
+lib/
+*.js
+*.js.map
+
+# Dependencias
+node_modules/
+
+# Entorno (no subir credenciales)
+.env
+.env.local
+.env.*.local
+
+# Firebase
+.runtimeconfig.json
+.firebase/
+
+# Logs y caché
+npm-debug.log*
+.npm
+
+# Jest
+coverage/

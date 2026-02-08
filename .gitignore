@@ -1,0 +1,44 @@
+# Dependencias
+node_modules/
+
+# Firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+*.local
+.runtimeconfig.json
+
+# Entorno
+.env
+.env.local
+.env.*.local
+
+# Logs y caché
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Build / compilado (en functions se ignora lib/)
+dist/
+build/
+*.tsbuildinfo
+
+# Cobertura y tests
+coverage/
+.nyc_output/

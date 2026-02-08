@@ -1,0 +1,75 @@
+---
+description: Convenciones TypeScript y estándares de código del proyecto
+alwaysApply: true
+---
+
+# Convenciones TypeScript y estándares de código
+
+## TypeScript y estilo
+
+- **TypeScript estricto**: Habilitar `strict: true` en `tsconfig.json`. No relajar opciones para evitar errores.
+- **const por defecto**: Usar `const` siempre; `let` solo cuando la variable se reasigne.
+- **No usar `any`**: Preferir `unknown` y type guards o aserciones acotadas cuando sea necesario.
+- **Interfaces sobre types**: Preferir `interface` para objetos y contratos; `type` para uniones, intersecciones o alias simples.
+
+## Async y funciones
+
+- **async/await**: Preferir sobre callbacks o `.then()`. Código lineal y legible.
+- **Funciones puras**: Cuando sea posible, funciones sin efectos secundarios y mismo input → mismo output. Facilita tests y razonamiento.
+
+## Documentación y nombres
+
+- **JSDoc en funciones públicas**: Incluir `@param`, `@returns` y descripción breve en exports y APIs públicas.
+- **Nombres en inglés**: Variables, funciones, tipos y archivos en inglés. Comentarios explicativos de lógica compleja en español.
+
+## Errores y logging
+
+- **Manejo de errores**: Usar `try/catch` en flujos async y en puntos donde se integra con I/O o APIs. No tragar errores en bloque vacío.
+- **Logging**: Registrar errores con contexto (mensaje, causa si aplica) antes de relanzar o devolver.
+
+## Módulos y estructura
+
+- **Exports named**: Usar `export { foo }` / `export function foo()`; evitar `export default` para mejor refactor y tree-shaking.
+- **Tamaño de archivo**: Máximo ~200 líneas por archivo. Si se supera, extraer módulos o servicios.
+- **Un servicio = un archivo**: Cada servicio/clase de lógica en su propio archivo; un concepto principal por archivo.
+
+### Ejemplo de función pública con JSDoc
+
+```typescript
+/**
+ * Obtiene el tracking por ID desde el repositorio.
+ * @param id - Identificador del tracking
+ * @returns El tracking si existe, undefined si no
+ * @throws Si falla la lectura en el repositorio
+ */
+export async function getTrackingById(id: string): Promise<Tracking | undefined> {
+  try {
+    return await repository.findById(id);
+  } catch (e) {
+    logger.error('Error fetching tracking', { id, error: e });
+    throw e;
+  }
+}
+```
+
+### Ejemplo: interface y unknown en lugar de any
+
+```typescript
+// ✅ Preferido
+interface TrackingResult {
+  id: string;
+  status: string;
+}
+
+function parseResponse(data: unknown): TrackingResult {
+  if (isValidTrackingShape(data)) {
+    return data;
+  }
+  throw new Error('Invalid tracking shape');
+}
+
+// ❌ Evitar
+function parseResponse(data: any): any {
+  return data;
+}
+```
