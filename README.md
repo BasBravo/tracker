@@ -101,27 +101,61 @@ cp .env.example .env
 
 Variables usadas por el código:
 
-| Variable       | Descripción                          | Ejemplo              |
-|----------------|--------------------------------------|----------------------|
-| `SMTP_HOST`    | Servidor SMTP                        | `smtp.gmail.com`     |
-| `SMTP_PORT`    | Puerto (587 / 465)                   | `587`                |
-| `SMTP_SECURE`  | `true` para TLS (puerto 465)         | `false`              |
-| `SMTP_USER`    | Usuario SMTP                         | `tu-email@gmail.com` |
-| `SMTP_PASS`    | Contraseña o app password             | `***`                |
+| Variable       | Descripción                          | Ejemplo                 |
+|----------------|--------------------------------------|-------------------------|
+| `SMTP_HOST`    | Servidor SMTP                        | `smtp.gmail.com`        |
+| `SMTP_PORT`    | Puerto (587 / 465)                   | `587`                   |
+| `SMTP_SECURE`  | `true` para TLS (puerto 465)         | `false`                 |
+| `SMTP_USER`    | Usuario SMTP                         | `tu-email@gmail.com`    |
+| `SMTP_PASS`    | Contraseña o app password            | `***`                   |
 | `FROM_EMAIL`   | Remitente de las alertas             | `tracker@midominio.com` |
 
 **IA (extracción semántica, fallback cuando no hay schema ni heurísticas):**
 
-| Variable                    | Descripción                                                                 | Ejemplo              |
-|-----------------------------|-----------------------------------------------------------------------------|----------------------|
-| `VERTEX_AI_LOCATION`       | Región Vertex AI (mismo proyecto GCP). Si se define, se usa Vertex.          | `europe-west1`       |
-| `GEMINI_API_KEY`           | (Opcional) API key de [Google AI Studio](https://aistudio.google.com). Tier gratuito. | `***`        |
-| `GEMINI_EXTRACTION_ENABLED`| Desactivar fallback IA: `false`                                            | `true` (por defecto)  |
-| `GEMINI_RELEVANCE_FILTER_ENABLED` | Desactivar filtro de relevancia sobre matches: `false` (por defecto activo). Reduce falsos positivos en el email. |
+| Variable                           | Descripción                                                                           | Ejemplo                   |
+|------------------------------------|---------------------------------------------------------------------------------------|---------------------------|
+| `VERTEX_AI_LOCATION`               | Región Vertex AI (mismo proyecto GCP). Si se define, se usa Vertex.                   | `europe-west1`            |
+| `GEMINI_API_KEY`                   | (Opcional) API key de [Google AI Studio](https://aistudio.google.com). Tier gratuito. | `***`                     |
+| `GEMINI_EXTRACTION_ENABLED`        | Desactivar fallback IA: `false`                                                       | `true` (por defecto)      |
+| `GEMINI_RELEVANCE_FILTER_ENABLED`  | Desactivar filtro de relevancia sobre matches: `false` (por defecto activo). Reduce falsos positivos en el email. |
+| `HEADLESS_FETCH_URL`               | (Opcional) URL base del servicio de renderizado (Puppeteer). Si está definida y una página devuelve anti-bot, se llama a este servicio para obtener el HTML. Ver sección "Sitios con protección anti-bot". | `https://tracker-headless-xxx.run.app` |
 
 Sin `VERTEX_AI_LOCATION` ni `GEMINI_API_KEY`, el fallback por IA no se ejecuta. Ver [PLAN.md](./PLAN.md) para costes y detalles.
 
 No subas `.env` al repositorio (está en `.gitignore`).
+
+### Sitios con protección anti-bot (p. ej. Back Market)
+
+Algunos sitios (como **Back Market**) devuelven un reto anti-bot cuando la petición no viene de un navegador real. En ese caso el sistema detecta la respuesta (JSON con `bot-need-challenge`), registra un error claro en los logs (`tracking_error` con `antibotChallenge: true`) y, si está configurado, **reintenta con un servicio headless** que renderiza la página con Puppeteer.
+
+**Variable de entorno (opcional):**
+
+| Variable               | Descripción                                                                 | Ejemplo                                      |
+|------------------------|-----------------------------------------------------------------------------|----------------------------------------------|
+| `HEADLESS_FETCH_URL`   | URL base del servicio de renderizado. Si existe, en caso de anti-bot se llama a `GET HEADLESS_FETCH_URL?url=ENCODED_URL` y se usa el HTML devuelto. | `https://headless-xxx.run.app`              |
+
+**Servicio headless incluido (Cloud Run, escala a cero):**
+
+En el repo hay un servicio listo para desplegar en **Google Cloud Run** (sin Chromium en las Functions, para no disparar costes ni tamaño del despliegue):
+
+```bash
+cd headless-service
+npm install
+gcloud run deploy tracker-headless \
+  --source . \
+  --region europe-west1 \
+  --memory 1Gi \
+  --timeout 60 \
+  --no-allow-unauthenticated
+```
+
+Luego en **Firebase Console** → Functions → Variables de entorno, añade `HEADLESS_FETCH_URL` = `https://tracker-headless-XXXXX.run.app`. Si usas autenticación en Cloud Run, configura la cuenta de servicio de las Functions con permiso para invocar el servicio.
+
+Detalles y alternativas en [headless-service/README.md](./headless-service/README.md).
+
+**Otras opciones:** API oficial de Back Market ([doc.backmarket.io](https://doc.backmarket.io/)) si tienes acceso; o servicios de terceros (Browserless, ScrapingBee, etc.) que expongan una URL con query `url=`.
+
+El cliente HTTP ya envía cabeceras tipo navegador (`User-Agent`, `Referer`, `sec-ch-ua`) para maximizar compatibilidad con el resto de sitios.
 
 ### En producción (Firebase)
 

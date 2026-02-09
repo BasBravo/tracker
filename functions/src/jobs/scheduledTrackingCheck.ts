@@ -10,8 +10,17 @@ import {
   updateLastChecked,
   initializeFirebaseAdmin,
 } from "../services/trackingRepository";
-import { fetchHtml, FetchHtmlError } from "../services/httpClient";
-import { extractProductsFromHtml } from "../services/schemaExtractor";
+import {
+  fetchHtml,
+  fetchHtmlHeadless,
+  FetchHtmlError,
+  FETCH_ERROR_ANTIBOT,
+  isHeadlessFetchAvailable,
+} from "../services/httpClient";
+import {
+  extractProductsFromHtml,
+  extractProductsFromEmbeddedJson,
+} from "../services/schemaExtractor";
 import { extractWithFallback } from "../services/heuristicParser";
 import { getNextPageUrl } from "../services/paginationHelper";
 import {
@@ -22,6 +31,7 @@ import {
   filterMatchesByRelevance,
 } from "../services/aiExtractor";
 import { findMatches } from "../services/criteriaAnalyzer";
+import { verifyMatchesOnProductPages } from "../services/productPageVerifier";
 import { saveMatch } from "../services/matchRepository";
 
 const TRACKINGS_PER_RUN = 10;
@@ -84,11 +94,39 @@ export async function runScheduledTrackingCheck(): Promise<void> {
       let pagesFetched = 0;
 
       while (pagesFetched < paginationLimit) {
-        const { html, finalUrl } = await fetchHtml(currentUrl);
+        let html: string;
+        let finalUrl: string;
+        try {
+          const result = await fetchHtml(currentUrl);
+          html = result.html;
+          finalUrl = result.finalUrl;
+        } catch (fetchErr) {
+          if (
+            fetchErr instanceof FetchHtmlError &&
+            fetchErr.code === FETCH_ERROR_ANTIBOT &&
+            isHeadlessFetchAvailable()
+          ) {
+            const headlessUrl = process.env.HEADLESS_FETCH_URL!.trim();
+            log("tracking_headless_fallback", { runId, trackingId, page: pagesFetched + 1 });
+            const result = await fetchHtmlHeadless(currentUrl, headlessUrl);
+            html = result.html;
+            finalUrl = result.finalUrl;
+          } else {
+            throw fetchErr;
+          }
+        }
         pagesFetched++;
 
         const schemaProducts = extractProductsFromHtml(html, finalUrl);
-        let pageProducts = extractWithFallback(html, finalUrl, schemaProducts);
+        let embeddedProducts: ReturnType<typeof extractProductsFromEmbeddedJson> = [];
+        if (schemaProducts.length === 0) {
+          embeddedProducts = extractProductsFromEmbeddedJson(html, finalUrl);
+          if (embeddedProducts.length > 0) {
+            log("tracking_embedded_json_used", { runId, trackingId, page: pagesFetched, count: embeddedProducts.length });
+          }
+        }
+        const initialProducts = schemaProducts.length > 0 ? schemaProducts : embeddedProducts;
+        let pageProducts = extractWithFallback(html, finalUrl, initialProducts);
 
         if (pageProducts.length === 0 && isAiExtractionAvailable()) {
           log("tracking_ai_fallback", { runId, trackingId, page: pagesFetched });
@@ -144,6 +182,13 @@ export async function runScheduledTrackingCheck(): Promise<void> {
         matches = await filterMatchesByRelevance(matches, tracking.criteria, tracking.instruction);
         log("tracking_relevance_filter_done", { runId, trackingId, matchesAfter: matches.length });
       }
+      if (matches.length > 0) {
+        log("tracking_product_page_verification_start", { runId, trackingId, matchesBefore: matches.length });
+        matches = await verifyMatchesOnProductPages(matches, tracking.criteria, {
+          log: (event, data) => log(event, { runId, trackingId, ...data }),
+        });
+        log("tracking_product_page_verification_done", { runId, trackingId, matchesAfter: matches.length });
+      }
       const now = admin.firestore.Timestamp.now();
       let saved = 0;
       for (const m of matches) {
@@ -181,12 +226,23 @@ export async function runScheduledTrackingCheck(): Promise<void> {
       errors++;
       const message = err instanceof Error ? err.message : String(err);
       const isFetchError = err instanceof FetchHtmlError;
+      const isAntibot = isFetchError && (err as FetchHtmlError).code === FETCH_ERROR_ANTIBOT;
       logError("tracking_error", {
         runId,
         trackingId,
         error: message,
         fetchError: isFetchError,
+        antibotChallenge: isAntibot,
       });
+      if (isAntibot) {
+        log("tracking_antibot_hint", {
+          runId,
+          trackingId,
+          hint: isHeadlessFetchAvailable()
+            ? "Headless está configurado pero falló o no se intentó en esta petición."
+            : "Configura HEADLESS_FETCH_URL (servicio con Puppeteer/Playwright) para sitios anti-bot. Ver README.",
+        });
+      }
     }
   }
 

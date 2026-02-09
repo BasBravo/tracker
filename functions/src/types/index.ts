@@ -75,6 +75,8 @@ export interface Product {
   url: string;
   /** URL de la imagen principal del producto. */
   image?: string;
+  /** Descripción del producto (opcional; se usa para evaluar criterios si no hay campo dedicado). */
+  description?: string;
 }
 
 /**
@@ -335,6 +337,7 @@ export function validateProduct(value: unknown): ValidationResult<Product> {
   if (obj.size !== undefined && typeof obj.size !== "string") errors.push("product.size debe ser string si existe");
   if (obj.color !== undefined && typeof obj.color !== "string") errors.push("product.color debe ser string si existe");
   if (obj.image !== undefined && typeof obj.image !== "string") errors.push("product.image debe ser string si existe");
+  if (obj.description !== undefined && typeof obj.description !== "string") errors.push("product.description debe ser string si existe");
 
   if (errors.length > 0) return { success: false, errors };
 
@@ -347,6 +350,7 @@ export function validateProduct(value: unknown): ValidationResult<Product> {
   if (typeof obj.size === "string" && obj.size.trim()) product.size = obj.size.trim();
   if (typeof obj.color === "string" && obj.color.trim()) product.color = obj.color.trim();
   if (typeof obj.image === "string" && obj.image.trim()) product.image = obj.image.trim();
+  if (typeof obj.description === "string" && obj.description.trim()) product.description = obj.description.trim();
 
   return { success: true, data: product };
 }

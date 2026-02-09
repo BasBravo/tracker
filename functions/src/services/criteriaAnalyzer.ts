@@ -6,7 +6,7 @@
 import type { Criteria, Product } from "../types";
 
 /** Score mínimo para considerar un match (inclusive). */
-const MIN_MATCH_SCORE = 0.7;
+export const MIN_MATCH_SCORE = 0.7;
 
 /** Fallback de precio mínimo cuando productTypeHint es "bicicletas" y la IA no devolvió priceMin (trackings antiguos). */
 const FALLBACK_PRICE_MIN_BICYCLES_EUR = 100;
@@ -54,6 +54,28 @@ function textMatches(criteriaValue: string, productValue: string): boolean {
   return p.includes(c) || c.includes(p);
 }
 
+/** Texto del producto donde pueden aparecer color, talla, etc. (nombre + descripción). */
+function getSearchableText(product: Product): string {
+  const parts = [product.name, product.description].filter(Boolean) as string[];
+  return parts.join(" ").trim();
+}
+
+/** Escapa caracteres especiales de regex para usar en RegExp. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Comprueba si el valor buscado aparece en el texto como palabra (o número) para evitar falsos positivos.
+ */
+function valueAppearsInText(wanted: string, searchableText: string): boolean {
+  if (!wanted.trim()) return false;
+  const normalized = normalizeForCompare(searchableText);
+  const w = normalizeForCompare(wanted);
+  const wordBoundary = new RegExp(`\\b${escapeRegex(w)}\\b`, "i");
+  return wordBoundary.test(normalized);
+}
+
 /**
  * Comprueba si el producto cumple el criterio de precio (priceMin <= precio <= priceMax).
  * priceMin puede venir de la IA (inferido por tipo de producto) o fallback para bicicletas.
@@ -77,57 +99,106 @@ function evaluatePrice(product: Product, criteria: Criteria): { pass: boolean; s
 }
 
 /**
+ * Parsea product.size como lista de tallas (p. ej. "M,L,XL" o "L | XL").
+ */
+function parseSizeList(sizeStr: string): string[] {
+  return sizeStr
+    .split(/[\s,|/]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
  * Comprueba coincidencia de talla (exacta o equivalente: L/Large, 42, etc.).
- * Si el producto no tiene size pero el criterio sí, se considera "talla desconocida"
- * y se pasa con score 0.5 para no descartar productos que sí cumplen precio (p. ej. Canyon).
+ * Si la talla no está en el campo dedicado, se busca también en nombre y descripción (ej. "Vaquero 46", "Talla L").
  */
 function evaluateSize(product: Product, criteria: Criteria): { pass: boolean; score: number } {
   const wanted = criteria.size?.trim();
   if (!wanted) return { pass: true, score: 1 };
 
+  const searchable = getSearchableText(product);
+  const sizeInNameOrDesc = valueAppearsInText(wanted, searchable);
+
   const productSize = product.size?.trim();
   if (!productSize) {
+    if (sizeInNameOrDesc) return { pass: true, score: 0.8 };
     return { pass: true, score: 0.5 };
   }
 
   const w = normalizeForCompare(wanted);
-  const p = normalizeForCompare(productSize);
+  const productSizes = parseSizeList(productSize).map((s) => normalizeForCompare(s));
 
-  if (w === p) return { pass: true, score: 1 };
+  for (const p of productSizes) {
+    if (w === p) return { pass: true, score: 1 };
 
-  for (const variants of Object.values(SIZE_EQUIVALENTS)) {
-    const hasWanted = variants.some((v) => normalizeForCompare(v) === w);
-    const hasProduct = variants.some((v) => normalizeForCompare(v) === p);
-    if (hasWanted && hasProduct) return { pass: true, score: 0.95 };
+    for (const variants of Object.values(SIZE_EQUIVALENTS)) {
+      const hasWanted = variants.some((v) => normalizeForCompare(v) === w);
+      const hasProduct = variants.some((v) => normalizeForCompare(v) === p);
+      if (hasWanted && hasProduct) return { pass: true, score: 0.95 };
+    }
   }
 
-  if (p.includes(w) || w.includes(p)) return { pass: true, score: 0.85 };
-
+  if (sizeInNameOrDesc) return { pass: true, score: 0.8 };
   return { pass: false, score: 0 };
 }
 
 /**
+ * Comprueba si la talla pedida está entre las tallas disponibles (exacta o equivalente).
+ * Útil para verificación en página de producto cuando tenemos lista de tallas realmente disponibles.
+ *
+ * @param wantedSize - Talla solicitada por el usuario (ej. "L", "46")
+ * @param availableSizes - Tallas extraídas de la página de detalle (ej. ["XS"], ["36", "38"])
+ * @returns true si la talla pedida está disponible
+ */
+export function isRequestedSizeAvailable(
+  wantedSize: string,
+  availableSizes: string[]
+): boolean {
+  const wanted = wantedSize?.trim();
+  if (!wanted || availableSizes.length === 0) return true;
+
+  const w = normalizeForCompare(wanted);
+  for (const raw of availableSizes) {
+    const available = raw?.trim();
+    if (!available) continue;
+    const p = normalizeForCompare(available);
+    if (w === p) return true;
+    for (const variants of Object.values(SIZE_EQUIVALENTS)) {
+      const hasWanted = variants.some((v) => normalizeForCompare(v) === w);
+      const hasAvailable = variants.some((v) => normalizeForCompare(v) === p);
+      if (hasWanted && hasAvailable) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Comprueba coincidencia de color (exacta o similar: negro/negra, contiene, etc.).
+ * Si el color no está en el campo dedicado, se busca también en nombre y descripción del producto.
  */
 function evaluateColor(product: Product, criteria: Criteria): { pass: boolean; score: number } {
   const wanted = criteria.color?.trim();
   if (!wanted) return { pass: true, score: 1 };
 
   const productColor = product.color?.trim();
-  if (!productColor) return { pass: false, score: 0 };
+  const searchable = getSearchableText(product);
+  const inNameOrDesc = valueAppearsInText(wanted, searchable);
 
-  if (textMatches(wanted, productColor)) return { pass: true, score: 1 };
-
-  const w = normalizeForCompare(wanted);
-  const p = normalizeForCompare(productColor);
-
-  const wStem = w.replace(/([aeiou])s?$/i, "$1");
-  const pStem = p.replace(/([aeiou])s?$/i, "$1");
-  if (wStem === pStem || w.startsWith(pStem) || p.startsWith(wStem)) {
-    return { pass: true, score: 0.9 };
+  if (productColor) {
+    if (textMatches(wanted, productColor)) return { pass: true, score: 1 };
+    const w = normalizeForCompare(wanted);
+    const p = normalizeForCompare(productColor);
+    const wStem = w.replace(/([aeiou])s?$/i, "$1");
+    const pStem = p.replace(/([aeiou])s?$/i, "$1");
+    if (wStem === pStem || w.startsWith(pStem) || p.startsWith(wStem)) {
+      return { pass: true, score: 0.9 };
+    }
+    if (inNameOrDesc) return { pass: true, score: 0.85 };
+    return { pass: false, score: 0 };
   }
 
-  return { pass: false, score: 0 };
+  if (inNameOrDesc) return { pass: true, score: 0.85 };
+  return { pass: true, score: 0.5 };
 }
 
 /**
@@ -149,6 +220,18 @@ function evaluateProduct(product: Product, criteria: Criteria): number {
     colorResult.score * WEIGHT_COLOR;
 
   return Math.round(score * 100) / 100;
+}
+
+/**
+ * Calcula el score de match de un producto frente a los criterios (0–1).
+ * Útil para re-evaluar un producto extraído de su página de detalle.
+ *
+ * @param product - Producto a evaluar
+ * @param criteria - Criterios del tracking
+ * @returns Score en [0, 1]; 0 si no cumple algún criterio obligatorio
+ */
+export function getMatchScore(product: Product, criteria: Criteria): number {
+  return evaluateProduct(product, criteria);
 }
 
 /**

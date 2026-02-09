@@ -211,6 +211,7 @@ function buildProduct(
 
   const { size, color } = extractSizeAndColor(raw.additionalProperty);
   const image = firstImage(raw.image);
+  const description = typeof raw.description === "string" ? raw.description.trim() : undefined;
 
   return {
     name: name ?? "Producto sin nombre",
@@ -220,6 +221,7 @@ function buildProduct(
     ...(size && { size }),
     ...(color && { color }),
     ...(image && { image }),
+    ...(description && { description }),
   };
 }
 
@@ -324,5 +326,106 @@ export function extractProductsFromHtml(html: string, pageUrl: string): Extracte
     products.push({ ...product, confidenceScore: score });
   }
 
+  return products;
+}
+
+/** Claves que pueden contener el nombre del producto en JSON embebido. */
+const NAME_KEYS = ["name", "title", "label", "productName", "model"];
+/** Claves que pueden contener el precio (número o string). */
+const PRICE_KEYS = ["price", "priceAmount", "amount", "price_amount", "salePrice", "minPrice"];
+/** Claves que pueden contener la URL. */
+const URL_KEYS = ["url", "slug", "path", "link", "href"];
+
+function getFirstNumber(obj: Record<string, unknown>, keys: string[]): number | null {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "number" && v >= 0) return v;
+    if (typeof v === "string") {
+      const n = parseFloat(v.replace(/[^\d.,\-]/g, "").replace(",", "."));
+      if (!Number.isNaN(n) && n >= 0) return n;
+    }
+  }
+  return null;
+}
+
+function getFirstString(obj: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+/**
+ * Busca recursivamente en un objeto arrays que parezcan listas de productos (objetos con name/title y price).
+ */
+function findProductLikeArrays(
+  obj: unknown,
+  pageUrl: string,
+  collected: Map<string, Omit<ExtractedProduct, "confidenceScore">>,
+  depth: number
+): void {
+  if (depth > 6) return;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const rec = item as Record<string, unknown>;
+        const name = getFirstString(rec, NAME_KEYS);
+        const price = getFirstNumber(rec, PRICE_KEYS);
+        const urlRaw = getFirstString(rec, URL_KEYS);
+        if (name && price != null && price < 500_000) {
+          const url = urlRaw
+            ? urlRaw.startsWith("http")
+              ? urlRaw
+              : new URL(urlRaw, pageUrl).href
+            : `${pageUrl}#${encodeURIComponent(name.slice(0, 50))}`;
+          if (!collected.has(url)) {
+            collected.set(url, {
+              name,
+              price,
+              currency: DEFAULT_CURRENCY,
+              url,
+            });
+          }
+        }
+      }
+    }
+    return;
+  }
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+    const rec = obj as Record<string, unknown>;
+    const nextKeys = ["props", "pageProps", "data", "products", "items", "list", "results", "offers", "productsList"];
+    for (const key of nextKeys) {
+      const child = rec[key];
+      if (child !== undefined) findProductLikeArrays(child, pageUrl, collected, depth + 1);
+    }
+  }
+}
+
+/**
+ * Intenta extraer productos desde JSON embebido en el HTML (__NEXT_DATA__, __NUXT_DATA__, application/json).
+ * Útil para SPAs que no usan JSON-LD pero sí hidratan el estado en el HTML.
+ */
+export function extractProductsFromEmbeddedJson(html: string, pageUrl: string): ExtractedProduct[] {
+  const root = parse(html);
+  const scripts = root.querySelectorAll("script#__NEXT_DATA__, script#__NUXT_DATA__, script[type='application/json']");
+  const collected = new Map<string, Omit<ExtractedProduct, "confidenceScore">>();
+
+  for (const script of scripts) {
+    const text = script.textContent?.trim();
+    if (!text || text.length > 500_000) continue;
+    try {
+      const data = JSON.parse(text) as unknown;
+      findProductLikeArrays(data, pageUrl, collected, 0);
+    } catch {
+      // ignore
+    }
+  }
+
+  const products: ExtractedProduct[] = [];
+  for (const product of collected.values()) {
+    const score = computeConfidenceScore(product);
+    products.push({ ...product, confidenceScore: score });
+  }
   return products;
 }

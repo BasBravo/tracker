@@ -5,18 +5,34 @@
 
 export {
   fetchHtml,
+  fetchHtmlHeadless,
+  isHeadlessFetchAvailable,
   FetchHtmlError,
+  FETCH_ERROR_ANTIBOT,
   type FetchHtmlResult,
   type FetchHtmlErrorDetails,
 } from "./httpClient";
 
 export {
   extractProductsFromHtml,
+  extractProductsFromEmbeddedJson,
   computeConfidenceScore,
   type ExtractedProduct,
 } from "./schemaExtractor";
 
-export { findMatches, type CriteriaMatch } from "./criteriaAnalyzer";
+export { findMatches, getMatchScore, MIN_MATCH_SCORE, isRequestedSizeAvailable, type CriteriaMatch } from "./criteriaAnalyzer";
+
+export {
+  extractAvailabilityFromProductPage,
+  type PageAvailability,
+} from "./availabilityExtractor";
+
+export {
+  verifyMatchOnProductPage,
+  verifyMatchesOnProductPages,
+  MAX_PRODUCT_PAGES_TO_VERIFY,
+  type VerifyResult,
+} from "./productPageVerifier";
 
 export {
   extractProductsHeuristic,

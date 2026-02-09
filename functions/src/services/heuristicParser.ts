@@ -31,6 +31,9 @@ const PRICE_SELECTORS = [
   ".value",
   ".product-tile__price",
   ".productTile__price",
+  "[data-testid*='price']",
+  "[class*='PriceAmount']",
+  "[class*='priceAmount']",
 ];
 
 /** Selectores de nombre de producto. */
@@ -48,6 +51,10 @@ const NAME_SELECTORS = [
   "[class*='product-title']",
   ".product-tile__title",
   ".productTile__title",
+  "[data-testid*='title']",
+  "[class*='Title']",
+  "[class*='productName']",
+  "span[class*='name']",
 ];
 
 /** Selectores de talla. */
@@ -104,6 +111,15 @@ const PRODUCT_CARD_SELECTORS = [
   "article[class*='tile']",
   "[class*='ProductTile']",
   "[class*='product-tile']",
+  "article[class*='card']",
+  "[class*='Card']",
+  "[data-testid*='product']",
+  "[data-testid*='card']",
+  "article",
+  "a[href*='/p/']",
+  "a[href*='/product']",
+  "[class*='OfferCard']",
+  "[class*='offer-card']",
 ];
 
 /**
@@ -160,29 +176,62 @@ function firstAttr($: cheerio.CheerioAPI, selectors: string[], attr: string, roo
   return undefined;
 }
 
-/** Patrones para extraer talla desde texto de disponibilidad (Canyon y similares). */
-const SIZE_FROM_AVAILABILITY_REGEXES = [
+/** Patrones para extraer una sola talla (disponibilidad exclusiva en esa talla). */
+const SIZE_SINGLE_REGEXES = [
   /Disponible para comprar en\s+([A-Z0-9]+)/i,
-  /Solo disponible en talla\s+([A-Z0-9]+)/i,
-  /Solo disponible en talla\s+([A-Z0-9]+)\s*\|\s*[A-Z0-9]+/i,
-  /talla\s+([A-Z0-9]+)\s*(?:\||\||y|,)/i,
-  /(?:size|talla|talle)[:\s]+([A-Z0-9]+)/i,
-  /\b(3XS|2XS|XS|S|M|L|XL|2XL)\b/,
+  /Solo disponible en talla\s+([A-Z0-9]+)(?:\s|$)/i,
 ];
 
+/** Patrón para listas de tallas: "talla L | XL", "S, M, L, XL", "Selecciona talla S  M  L  XL". */
+const SIZE_LIST_REGEX = /(?:talla|size|talle|cuadro)\s*[:\s]*([A-Z0-9]+(?:\s*[\|,\/]\s*[A-Z0-9]+)+)/gi;
+const SIZE_TOKEN_REGEX = /\b(3XS|2XS|XS|S|M|L|XL|2XL|\d{2})\b/g;
+
 /**
- * Extrae talla desde el texto de una card (ej. "Disponible para comprar en L", "Solo disponible en talla L | XL").
+ * Extrae todas las tallas disponibles en el texto de la card.
+ * - Si hay "Disponible para comprar en L" -> solo L disponible.
+ * - Si hay "talla L | XL" o "S, M, L, XL" -> devuelve ["L","XL"] o ["S","M","L","XL"].
+ * Así el criterio puede comprobar si la talla pedida está en la lista.
  */
-function getSizeFromAvailabilityText(cardText: string): string | undefined {
+function getAllSizesFromAvailabilityText(cardText: string): string[] {
   const normalized = cardText.replace(/\s+/g, " ").trim();
-  for (const re of SIZE_FROM_AVAILABILITY_REGEXES) {
+
+  for (const re of SIZE_SINGLE_REGEXES) {
     const m = normalized.match(re);
     if (m && m[1]) {
       const size = m[1].trim();
-      if (size.length <= 4) return size;
+      if (size.length <= 4) return [size];
     }
   }
-  return undefined;
+
+  const listMatch = normalized.matchAll(SIZE_LIST_REGEX);
+  for (const m of listMatch) {
+    const block = m[1].trim();
+    const parts = block.split(/[\|,\/\s]+/).map((s) => s.trim()).filter((s) => s.length > 0 && s.length <= 4);
+    if (parts.length > 0) return [...new Set(parts)];
+  }
+
+  const tokens: string[] = [];
+  let tokenMatch: RegExpExecArray | null;
+  const tokenRe = new RegExp(SIZE_TOKEN_REGEX.source, "gi");
+  const sizeContext = /(?:talla|size|selecciona|disponible|cuadro)/i;
+  if (sizeContext.test(normalized)) {
+    while ((tokenMatch = tokenRe.exec(normalized)) !== null) {
+      tokens.push(tokenMatch[1].trim());
+    }
+    if (tokens.length > 0) return [...new Set(tokens)];
+  }
+
+  return [];
+}
+
+/**
+ * Extrae talla(s) desde el texto de la card y las devuelve como string único.
+ * Una talla -> "L". Varias -> "M,L,XL" para que el criterio pueda comprobar si la pedida está incluida.
+ */
+function getSizeFromAvailabilityText(cardText: string): string | undefined {
+  const sizes = getAllSizesFromAvailabilityText(cardText);
+  if (sizes.length === 0) return undefined;
+  return sizes.join(",");
 }
 
 /** Regex para encontrar números que parecen precios (ej. 1.799 o 2.499,99). */

@@ -32,6 +32,7 @@ interface AiProductRaw {
   color?: string;
   url?: string;
   image?: string;
+  description?: string;
 }
 
 /**
@@ -171,7 +172,7 @@ function buildProductTypeFilterPrompt(
     : "";
   return `Eres un asistente que filtra productos por categoría/tipo. ${instructionLine}Tipo de producto que interesa: "${productTypeHint}".
 
-A continuación se listan productos extraídos de una página (nombre | precio | URL). Algunos son del tipo indicado y otros son accesorios, componentes o productos de otra categoría que aparecen en la misma página.
+El tipo puede ser genérico (ej. "bicicletas", "vaqueros") o marca+producto (ej. "Apple Watch", "iPhone", "Samsung Galaxy"). Incluye cualquier producto que coincida: mismo nombre, marca, modelo o descripción. Por ejemplo, para "Apple Watch" incluye "Apple Watch SE", "Apple Watch Ultra", "Reloj Apple Watch", etc.
 
 Lista de productos (nombre | precio EUR | URL):
 ---
@@ -179,7 +180,7 @@ ${productSummaries.join("\n")}
 ---
 
 Devuelve ÚNICAMENTE un JSON array con las URLs exactas de los productos que SÍ corresponden al tipo "${productTypeHint}" (producto principal, no accesorios ni componentes sueltos). Si ninguno coincide, devuelve [].
-Sin markdown, sin explicaciones. Ejemplo: ["https://example.com/bike-1","https://example.com/bike-2"]`;
+Sin markdown, sin explicaciones. Ejemplo: ["https://example.com/product-1","https://example.com/product-2"]`;
 }
 
 function parseProductTypeFilterResponse(rawText: string): string[] {
@@ -287,7 +288,7 @@ ${lines.join("\n")}
 
 Devuelve ÚNICAMENTE un JSON array con las URLs exactas de los productos que SÍ coinciden de verdad con lo que busca el usuario:
 - Precio debe ser el precio real del producto (no una cuota mensual ni un número de modelo).
-- Talla debe coincidir si el usuario la pidió (ej. si pide L, no incluir XL ni productos sin talla indicada).
+- Talla: incluir solo si el producto tiene la talla pedida realmente disponible. Si el usuario pide L, excluir productos que solo tienen S/M/XL, que no indican talla, o que indican "Selecciona talla" sin talla concreta disponible.
 - Debe ser el tipo de producto indicado (ej. bicicleta completa, no un componente o accesorio).
 Si ninguno cumple de verdad, devuelve [].
 Sin markdown, sin explicaciones. Ejemplo: ["https://example.com/product-1","https://example.com/product-2"]`;
@@ -378,10 +379,10 @@ ${pageText}
 Instrucciones:
 - Extrae todos los productos que identifiques (nombre, precio, moneda, y si aparecen: talla, color, URL del producto, URL de imagen).
 - Precio: usa ÚNICAMENTE el precio de venta actual del producto (el que se paga por el artículo), nunca el "ahorro" ni "Ahorra hasta X €" ni "Ahorras X €". Busca el precio principal (ej. "Desde 4.199 €", "2.499 €") y devuélvelo tal cual. No uses precio tachado, ni original, ni dígitos de códigos (ej. "810" en "RX810"). No inventes ni redondees: el número debe coincidir exactamente con lo que muestra la página. Si la moneda no se indica, usa "EUR".
-- Talla: si en el texto del producto aparece disponibilidad por talla (ej. "Disponible para comprar en L", "Solo disponible en talla L", "talla L | XL"), extrae esa talla (o la primera si hay varias) en el campo size.
+- Talla: extrae las tallas realmente disponibles para ese producto. Si solo hay una (ej. "Disponible para comprar en L"), devuelve "L". Si hay varias (ej. "S, M, L, XL", "talla L | XL"), devuelve todas separadas por comas: "S,M,L,XL" o "L,XL". No inventes tallas: si no aparece disponibilidad por talla, deja size vacío o no lo incluyas.
 - Si solo hay un producto y no tiene URL propia, usa la URL de la página: "${pageUrl}".
 - Responde ÚNICAMENTE con un JSON válido: un array de objetos. Sin markdown, sin explicaciones.
-- Cada objeto debe tener: name (string), price (number), currency (string), url (string). Opcionales: size, color, image (strings).
+- Cada objeto debe tener: name (string), price (number), currency (string), url (string). Opcionales: size, color, image, description (strings). Si en el texto aparece una descripción o más datos del producto, inclúyelos en description para mejorar el matching.
 
 Formato de respuesta (ejemplo):
 [{"name":"Camiseta X","price":29.99,"currency":"EUR","url":"https://...","size":"M","color":"Negro"}, ...]`;
@@ -439,6 +440,7 @@ function parseAiResponse(
     if (typeof raw.size === "string" && raw.size.trim()) product.size = raw.size.trim();
     if (typeof raw.color === "string" && raw.color.trim()) product.color = raw.color.trim();
     if (typeof raw.image === "string" && raw.image.trim()) product.image = raw.image.trim();
+    if (typeof raw.description === "string" && raw.description.trim()) product.description = raw.description.trim();
     products.push(product);
   }
 

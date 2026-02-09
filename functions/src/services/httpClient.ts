@@ -4,6 +4,7 @@
  */
 
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig } from "axios";
+import { GoogleAuth } from "google-auth-library";
 
 /** Timeout por solicitud (ms). */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -20,6 +21,9 @@ const MIN_INTERVAL_PER_HOST_MS = 1_000;
 /** User-Agent de navegador realista (Chrome en Windows). */
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+/** Código de error cuando el sitio devuelve un reto anti-bot (p. ej. Back Market). */
+export const FETCH_ERROR_ANTIBOT = "ANTIBOT_CHALLENGE";
 
 /** Última vez que se hizo una petición por host (para rate limiting). */
 const lastRequestByHost = new Map<string, number>();
@@ -62,6 +66,38 @@ function isRetryableError(error: AxiosError): boolean {
   if (status != null && status >= 500 && status < 600) return true;
   if (status === 429) return true; // Too Many Requests
   return false;
+}
+
+/**
+ * Cabeceras adicionales tipo navegador para reducir detección como bot (compatibles con cualquier sitio).
+ */
+function getBrowserLikeHeaders(url: string): Record<string, string> {
+  try {
+    const origin = new URL(url).origin + "/";
+    return {
+      Referer: origin,
+      "sec-ch-ua": '"Chromium";v="120", "Google Chrome";v="120", "Not_A Brand";v="24"',
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": '"Windows"',
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Detecta si el cuerpo de la respuesta es un reto anti-bot (p. ej. Back Market devuelve JSON con bot-need-challenge).
+ */
+function isAntibotChallengeResponse(body: string): boolean {
+  const trimmed = body.trim();
+  if (trimmed.length > 2000 || !trimmed.startsWith("{")) return false;
+  try {
+    const data = JSON.parse(trimmed) as { errors?: Array<{ code?: string }> };
+    const code = data?.errors?.[0]?.code;
+    return code === "bot-need-challenge" || code === "challenge_required";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -149,6 +185,7 @@ export async function fetchHtml(
         method: "GET",
         timeout: timeoutMs,
         responseType: "text",
+        headers: getBrowserLikeHeaders(url),
       };
 
       const response = await client.request<string>(config);
@@ -156,6 +193,16 @@ export async function fetchHtml(
 
       if (typeof html !== "string") {
         throw new Error("La respuesta no es texto");
+      }
+
+      if (isAntibotChallengeResponse(html)) {
+        throw new FetchHtmlError({
+          message:
+            "El sitio devolvió un reto anti-bot (p. ej. Back Market). No se puede extraer HTML. Opciones: usar navegador headless (Puppeteer/Playwright) o la API oficial del sitio si está disponible.",
+          code: FETCH_ERROR_ANTIBOT,
+          status: response.status,
+          retriesExhausted: false,
+        });
       }
 
       const finalUrl =
@@ -169,6 +216,9 @@ export async function fetchHtml(
         status: response.status,
       };
     } catch (err) {
+      if (err instanceof FetchHtmlError) {
+        throw err;
+      }
       lastError = err instanceof AxiosError ? err : new AxiosError(String(err));
 
       const retryable = isRetryableError(lastError);
@@ -196,4 +246,104 @@ export async function fetchHtml(
     status,
     retriesExhausted: true,
   });
+}
+
+/** Timeout por defecto para headless (renderizado puede tardar). */
+const HEADLESS_FETCH_TIMEOUT_MS = 60_000;
+
+/**
+ * Obtiene el HTML de una URL usando un servicio externo de renderizado (Puppeteer/Playwright).
+ * Pensado para cuando fetchHtml falla por anti-bot. No incluye Chromium en este paquete.
+ *
+ * @param targetUrl - URL de la página a renderizar
+ * @param headlessServiceUrl - URL base del servicio (ej. https://headless-xxx.run.app). Se llama GET con query url=
+ * @param options - timeout opcional
+ * @returns HTML, URL final y status
+ */
+/**
+ * Indica si la URL parece ser un servicio Cloud Run (requiere token de identidad si es privado).
+ */
+function isCloudRunUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.hostname.endsWith(".run.app");
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchHtmlHeadless(
+  targetUrl: string,
+  headlessServiceUrl: string,
+  options: { timeoutMs?: number } = {}
+): Promise<FetchHtmlResult> {
+  const base = headlessServiceUrl.replace(/\/$/, "");
+  const separator = base.includes("?") ? "&" : "?";
+  const serviceUrl = `${base}${separator}url=${encodeURIComponent(targetUrl)}`;
+  const timeoutMs = options.timeoutMs ?? HEADLESS_FETCH_TIMEOUT_MS;
+
+  let html: string;
+  let status: number;
+
+  if (isCloudRunUrl(base)) {
+    const auth = new GoogleAuth();
+    const client = await auth.getIdTokenClient(base);
+    const res = await client.request<string>({
+      url: serviceUrl,
+      method: "GET",
+      responseType: "text",
+      timeout: timeoutMs,
+    });
+    html = typeof res.data === "string" ? res.data : "";
+    status = res.status ?? 200;
+  } else {
+    const config: AxiosRequestConfig = {
+      url: serviceUrl,
+      method: "GET",
+      timeout: timeoutMs,
+      responseType: "text",
+      validateStatus: (s: number) => s === 200,
+    };
+    const response = await defaultClient.request<string>(config);
+    html = response.data;
+    status = response.status;
+  }
+
+  if (status !== 200) {
+    throw new FetchHtmlError({
+      message: `Servicio headless devolvió ${status}`,
+      status,
+      retriesExhausted: false,
+    });
+  }
+
+  if (typeof html !== "string") {
+    throw new FetchHtmlError({
+      message: "El servicio headless no devolvió texto",
+      retriesExhausted: false,
+    });
+  }
+
+  if (isAntibotChallengeResponse(html)) {
+    throw new FetchHtmlError({
+      message: "El sitio siguió devolviendo anti-bot tras renderizado headless",
+      code: FETCH_ERROR_ANTIBOT,
+      status: 200,
+      retriesExhausted: false,
+    });
+  }
+
+  return {
+    html,
+    finalUrl: targetUrl,
+    status,
+  };
+}
+
+/**
+ * Indica si está configurado un servicio headless (solo comprueba que exista la variable).
+ */
+export function isHeadlessFetchAvailable(): boolean {
+  const url = process.env.HEADLESS_FETCH_URL;
+  return typeof url === "string" && url.trim().length > 0;
 }

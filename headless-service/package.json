@@ -1,0 +1,15 @@
+{
+  "name": "tracker-headless-service",
+  "description": "Servicio de renderizado HTML con Puppeteer para el tracker. Desplegable en Cloud Run.",
+  "type": "module",
+  "main": "server.mjs",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^23.0.0"
+  },
+  "private": true
+}

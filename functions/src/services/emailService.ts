@@ -80,26 +80,27 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Genera el HTML de un bloque de producto (nombre, precio, talla, color, imagen, link).
+ * Genera el HTML de un bloque de producto (nombre, precio, coincidencia, link).
+ * No se muestran talla, color ni otras propiedades para mantener el correo limpio.
  */
 function productBlockHtml(item: MatchItem, index: number): string {
   const p = item.product;
   const name = escapeHtml(p.name);
   const price = `${p.price.toFixed(2)} ${escapeHtml(p.currency)}`;
-  const size = p.size ? escapeHtml(p.size) : "—";
-  const color = p.color ? escapeHtml(p.color) : "—";
   const url = p.url;
   const img = p.image && p.image.startsWith("http") ? p.image : "";
-  const score = item.confidenceScore != null ? `Score: ${(item.confidenceScore * 100).toFixed(0)}%` : "";
+  const matchLabel =
+    item.confidenceScore != null
+      ? `Coincidencia con tu búsqueda: ${(item.confidenceScore * 100).toFixed(0)}%`
+      : "";
 
   return `
     <tr>
       <td style="padding: 1rem; border: 1px solid #eee; vertical-align: top;">
         ${img ? `<img src="${escapeHtml(img)}" alt="${name}" style="max-width: 200px; height: auto; display: block; margin-bottom: 0.5rem;" />` : ""}
         <strong style="font-size: 1rem;">${name}</strong>
-        ${score ? `<br /><span style="color: #666; font-size: 0.85rem;">${score}</span>` : ""}
+        ${matchLabel ? `<br /><span style="color: #666; font-size: 0.85rem;">${matchLabel}</span>` : ""}
         <p style="margin: 0.5rem 0 0 0; font-size: 1.1rem; color: #222;">${price}</p>
-        <p style="margin: 0.25rem 0; font-size: 0.9rem; color: #555;">Talla: ${size} · Color: ${color}</p>
         <p style="margin: 0.5rem 0 0 0;"><a href="${escapeHtml(url)}" style="color: #1976d2;">Ver producto</a></p>
       </td>
     </tr>`;
@@ -107,9 +108,13 @@ function productBlockHtml(item: MatchItem, index: number): string {
 
 /**
  * Genera el HTML completo del email de alerta (soporta múltiples matches).
+ * Los productos se ordenan por coincidencia (score) de mayor a menor.
  */
 export function buildAlertHtml(matches: MatchItem[]): string {
-  const productRows = matches.map((m, i) => productBlockHtml(m, i)).join("");
+  const sorted = [...matches].sort(
+    (a, b) => (b.confidenceScore ?? 0) - (a.confidenceScore ?? 0)
+  );
+  const productRows = sorted.map((m, i) => productBlockHtml(m, i)).join("");
   const count = matches.length;
   const title = count === 1 ? "1 producto coincide con tu tracking" : `${count} productos coinciden con tu tracking`;
 

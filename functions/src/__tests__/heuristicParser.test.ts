@@ -94,6 +94,33 @@ describe("heuristicParser", () => {
       expect(result[0].name).toBe("Strive:ON CFR Underdog");
       expect(result[0].price).toBe(4199);
     });
+
+    it("extrae varias tallas disponibles como lista (M,L,XL) para filtrado correcto", () => {
+      const html = `
+      <div class="product-card">
+        <h2 class="product-name">Bike Multi-Talla</h2>
+        <p class="price">1.599 €</p>
+        <p>Selecciona talla de cuadro S  M  L  XL</p>
+        <a href="/bike/1">Ver</a>
+      </div>`;
+      const result = extractProductsHeuristic(html, PAGE_URL);
+      expect(result).toHaveLength(1);
+      expect(result[0].size).toBeDefined();
+      expect(result[0].size!.split(",").sort()).toEqual(["L", "M", "S", "XL"]);
+    });
+
+    it("extrae una sola talla cuando dice 'Disponible para comprar en L'", () => {
+      const html = `
+      <div class="product-card">
+        <h2 class="product-name">Bike Solo L</h2>
+        <p class="price">1.799 €</p>
+        <p>Disponible para comprar en L</p>
+        <a href="/bike/2">Ver</a>
+      </div>`;
+      const result = extractProductsHeuristic(html, PAGE_URL);
+      expect(result).toHaveLength(1);
+      expect(result[0].size).toBe("L");
+    });
   });
 
   describe("extractWithFallback", () => {

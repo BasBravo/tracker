@@ -4,6 +4,7 @@
 
 import {
   extractProductsFromHtml,
+  extractProductsFromEmbeddedJson,
   computeConfidenceScore,
 } from "../services/schemaExtractor";
 import type { Product } from "../types";
@@ -124,6 +125,29 @@ describe("schemaExtractor", () => {
       const score = computeConfidenceScore(p);
       expect(score).toBeGreaterThanOrEqual(0);
       expect(score).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe("extractProductsFromEmbeddedJson", () => {
+    it("devuelve array vacío si no hay script con JSON de datos", () => {
+      const result = extractProductsFromEmbeddedJson(HTML_EMPTY, PAGE_URL);
+      expect(result).toEqual([]);
+    });
+
+    it("extrae productos desde __NEXT_DATA__ con array de objetos name/price", () => {
+      const html = `
+        <html><body>
+          <script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+            props: { pageProps: { data: { products: [{ name: "Apple Watch SE", price: 249, url: "/es-es/p/aw-se-1" }] } } },
+          })}</script>
+        </body></html>
+      `;
+      const result = extractProductsFromEmbeddedJson(html, "https://www.backmarket.es/");
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe("Apple Watch SE");
+      expect(result[0].price).toBe(249);
+      expect(result[0].url).toBe("https://www.backmarket.es/es-es/p/aw-se-1");
+      expect(result[0].confidenceScore).toBeGreaterThanOrEqual(0);
     });
   });
 });

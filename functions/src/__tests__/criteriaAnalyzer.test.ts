@@ -2,7 +2,7 @@
  * Tests para criteriaAnalyzer: comparación de productos con criterios.
  */
 
-import { findMatches, type CriteriaMatch } from "../services/criteriaAnalyzer";
+import { findMatches, isRequestedSizeAvailable, type CriteriaMatch } from "../services/criteriaAnalyzer";
 import type { Criteria, Product } from "../types";
 
 describe("criteriaAnalyzer", () => {
@@ -67,6 +67,34 @@ describe("criteriaAnalyzer", () => {
       expect(result).toHaveLength(0);
     });
 
+    it("incluye producto sin talla con score menor cuando usuario pide talla L (filtro IA puede depurar después)", () => {
+      const products: Product[] = [
+        { ...productBase, price: 100 },
+      ];
+      const criteria: Criteria = { size: "L", priceMax: 200 };
+      const result = findMatches(products, criteria);
+      expect(result).toHaveLength(1);
+      expect(result[0].confidenceScore).toBeLessThan(1);
+    });
+
+    it("incluye producto cuando la talla pedida está en la lista de tallas (M,L,XL)", () => {
+      const products: Product[] = [
+        { ...productBase, size: "M,L,XL" },
+      ];
+      const criteria: Criteria = { size: "L" };
+      const result = findMatches(products, criteria);
+      expect(result).toHaveLength(1);
+    });
+
+    it("excluye producto cuando la talla pedida no está en la lista (solo M,XL)", () => {
+      const products: Product[] = [
+        { ...productBase, size: "M,XL" },
+      ];
+      const criteria: Criteria = { size: "L" };
+      const result = findMatches(products, criteria);
+      expect(result).toHaveLength(0);
+    });
+
     it("incluye producto cuando color coincide", () => {
       const products: Product[] = [
         { ...productBase, color: "negro" },
@@ -84,6 +112,26 @@ describe("criteriaAnalyzer", () => {
       const criteria: Criteria = { color: "negro" };
       const result = findMatches(products, criteria);
       expect(result).toHaveLength(0);
+    });
+
+    it("incluye producto cuando el color pedido aparece en el nombre (sin campo color)", () => {
+      const products: Product[] = [
+        { ...productBase, name: "Vaquero recto negro", price: 30 },
+      ];
+      const criteria: Criteria = { color: "negro", priceMax: 35 };
+      const result = findMatches(products, criteria);
+      expect(result).toHaveLength(1);
+      expect(result[0].confidenceScore).toBeGreaterThanOrEqual(0.7);
+    });
+
+    it("incluye producto cuando la talla pedida aparece en el nombre (sin campo size)", () => {
+      const products: Product[] = [
+        { ...productBase, name: "Vaquero slim talla 46", price: 32 },
+      ];
+      const criteria: Criteria = { size: "46", priceMax: 40 };
+      const result = findMatches(products, criteria);
+      expect(result).toHaveLength(1);
+      expect(result[0].confidenceScore).toBeGreaterThanOrEqual(0.7);
     });
 
     it("combina priceMax, size y color", () => {
@@ -154,6 +202,30 @@ describe("criteriaAnalyzer", () => {
       const result = findMatches(products, criteria);
       expect(result).toHaveLength(1);
       expect(result[0].product.price).toBe(89);
+    });
+  });
+
+  describe("isRequestedSizeAvailable", () => {
+    it("devuelve true si no hay talla pedida", () => {
+      expect(isRequestedSizeAvailable("", ["XS", "S"])).toBe(true);
+      expect(isRequestedSizeAvailable("L", [])).toBe(true);
+    });
+
+    it("devuelve true si la talla pedida está en la lista", () => {
+      expect(isRequestedSizeAvailable("L", ["XS", "S", "M", "L", "XL"])).toBe(true);
+      expect(isRequestedSizeAvailable("46", ["36", "38", "40", "42", "44", "46"])).toBe(true);
+      expect(isRequestedSizeAvailable("L", ["L"])).toBe(true);
+    });
+
+    it("devuelve false si la talla pedida no está en la lista", () => {
+      expect(isRequestedSizeAvailable("L", ["XS"])).toBe(false);
+      expect(isRequestedSizeAvailable("46", ["36"])).toBe(false);
+      expect(isRequestedSizeAvailable("L", ["S", "M", "XL"])).toBe(false);
+    });
+
+    it("acepta equivalentes (L y Large, 42 y L)", () => {
+      expect(isRequestedSizeAvailable("L", ["Large"])).toBe(true);
+      expect(isRequestedSizeAvailable("L", ["42", "44"])).toBe(true);
     });
   });
 });
