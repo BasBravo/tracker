@@ -1,14 +1,20 @@
 /**
  * Handler HTTP POST para crear un tracking.
- * Body: { url, criteria?, email, frequency?, active? }
- * Valida, persiste en Firestore y devuelve el ID. Códigos HTTP apropiados.
+ * Body: { url, instruction, email, frequency?, active?, paginationLimit? }
+ * La IA extrae criterios desde la instrucción; se persisten url, instruction, criteria, etc.
  */
 
 import type * as functions from "firebase-functions";
 import type { Criteria, TrackingFrequency } from "../types";
-import { validateUrl, validateEmail, validateCriteria, validateTrackingFrequency } from "../utils/validators";
-import { createTracking } from "../services/trackingRepository";
-import { initializeFirebaseAdmin } from "../services/trackingRepository";
+import {
+  validateUrl,
+  validateEmail,
+  validateInstruction,
+  validateTrackingFrequency,
+  validatePaginationLimit,
+} from "../utils/validators";
+import { createTracking as createTrackingInDb, initializeFirebaseAdmin } from "../services/trackingRepository";
+import { extractCriteriaFromInstruction } from "../services/aiExtractor";
 
 const LOG_CONTEXT = "createTracking";
 
@@ -25,7 +31,8 @@ function sendJson(res: functions.Response, status: number, body: object): void {
 }
 
 /**
- * Handler: POST con body JSON { url, criteria?, email, frequency?, active? }.
+ * Handler: POST con body JSON { url, instruction, email, frequency?, active?, paginationLimit? }.
+ * La instrucción en lenguaje natural se convierte en criterios estructurados mediante IA.
  */
 export async function handleCreateTracking(
   req: functions.https.Request,
@@ -48,38 +55,48 @@ export async function handleCreateTracking(
 
   const urlResult = validateUrl(raw.url);
   if (!urlResult.success) {
-    const msg = urlResult.error?.message ?? "URL inválida";
+    const msg = urlResult.error?.issues?.[0]?.message ?? "URL inválida";
     sendJson(res, 400, { error: "Validation failed", details: { url: msg } });
+    return;
+  }
+
+  const instructionResult = validateInstruction(raw.instruction);
+  if (!instructionResult.success) {
+    const msg = instructionResult.error?.issues?.[0]?.message ?? "Instrucción inválida";
+    sendJson(res, 400, { error: "Validation failed", details: { instruction: msg } });
     return;
   }
 
   const emailResult = validateEmail(raw.email);
   if (!emailResult.success) {
-    const msg = emailResult.error?.message ?? "Email inválido";
+    const msg = emailResult.error?.issues?.[0]?.message ?? "Email inválido";
     sendJson(res, 400, { error: "Validation failed", details: { email: msg } });
     return;
   }
 
-  const criteriaResult = validateCriteria(raw.criteria ?? {});
-  if (!criteriaResult.success) {
-    const msg = criteriaResult.error?.message ?? "Criteria inválidos";
-    sendJson(res, 400, { error: "Validation failed", details: { criteria: msg } });
-    return;
-  }
-
   const frequency = raw.frequency != null ? validateTrackingFrequency(raw.frequency) : null;
-  const frequencyValue: TrackingFrequency = frequency?.success ? frequency.data : "daily";
+  const frequencyValue: TrackingFrequency = frequency?.success ? (frequency.data as TrackingFrequency) : "daily";
   const active = typeof raw.active === "boolean" ? raw.active : true;
+  const paginationLimitResult = validatePaginationLimit(raw.paginationLimit);
+  const paginationLimit = paginationLimitResult.success ? paginationLimitResult.data : 5;
+
+  const url = urlResult.data as string;
+  const instruction = instructionResult.data as string;
+  const email = emailResult.data as string;
+
+  const criteria: Criteria = await extractCriteriaFromInstruction(instruction, url);
 
   initializeFirebaseAdmin();
 
   try {
-    const tracking = await createTracking({
-      url: urlResult.data,
-      email: emailResult.data,
-      criteria: criteriaResult.data as Criteria,
+    const tracking = await createTrackingInDb({
+      url,
+      instruction,
+      criteria,
+      email,
       frequency: frequencyValue,
       active,
+      paginationLimit,
     });
 
     log("tracking_created", { trackingId: tracking.id });

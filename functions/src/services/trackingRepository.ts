@@ -18,23 +18,28 @@ const FREQUENCY_MS: Record<TrackingFrequency, number> = {
 /** Tipo para documento de tracking en Firestore (lastChecked como Timestamp). */
 export interface TrackingDocument {
   url: string;
+  instruction: string;
   criteria: Criteria;
   email: string;
   frequency: TrackingFrequency;
   active: boolean;
   lastChecked: admin.firestore.Timestamp | null;
+  paginationLimit?: number;
 }
 
 let adminInitialized = false;
 
 /**
  * Inicializa Firebase Admin (idempotente).
- * Llamar al arranque de la aplicación o antes del primer uso del repositorio.
+ * Si PROJECT_ID o PROJECT_ID están definidos, se usa ese proyecto
+ * (evita usar el proyecto de la cuenta de servicio cuando se ejecutan scripts en local).
  */
 export function initializeFirebaseAdmin(): void {
   if (adminInitialized) return;
   if (admin.apps.length === 0) {
-    admin.initializeApp();
+    const projectId =
+      process.env.PROJECT_ID ?? process.env.PROJECT_ID;
+    admin.initializeApp(projectId ? { projectId } : undefined);
   }
   adminInitialized = true;
 }
@@ -49,15 +54,20 @@ function docToConfig(
   data: FirebaseFirestore.DocumentData
 ): TrackingConfig & { id: string } {
   const lastChecked = data.lastChecked ?? null;
-  return {
+  const out: TrackingConfig & { id: string } = {
     id,
     url: data.url,
+    instruction: typeof data.instruction === "string" ? data.instruction : "",
     criteria: data.criteria ?? {},
     email: data.email,
     frequency: data.frequency,
     active: data.active === true,
     lastChecked: lastChecked as TrackingConfig["lastChecked"],
   };
+  if (typeof data.paginationLimit === "number" && data.paginationLimit >= 1) {
+    out.paginationLimit = data.paginationLimit;
+  }
+  return out;
 }
 
 /**
@@ -72,11 +82,13 @@ export async function createTracking(
   return db.runTransaction(async (transaction) => {
     const payload: Omit<TrackingDocument, "lastChecked"> & { lastChecked: null } = {
       url: data.url,
+      instruction: data.instruction,
       criteria: data.criteria,
       email: data.email,
       frequency: data.frequency,
       active: data.active,
       lastChecked: null,
+      ...(typeof data.paginationLimit === "number" && { paginationLimit: data.paginationLimit }),
     };
     transaction.set(ref, payload);
     return docToConfig(ref.id, { ...payload });
@@ -115,8 +127,12 @@ export async function listTrackings(options?: {
 /**
  * Obtiene trackings activos que están pendientes de chequeo según su frecuencia.
  * Un tracking está pendiente si lastChecked es null o han pasado al menos X ms según frequency.
+ * Con options.force === true ignora la frecuencia y devuelve todos los activos (útil para pruebas).
  */
-export async function getActivePendingCheck(limit = 50): Promise<Array<TrackingConfig & { id: string }>> {
+export async function getActivePendingCheck(
+  limit = 50,
+  options?: { force?: boolean }
+): Promise<Array<TrackingConfig & { id: string }>> {
   const db = getDb();
   const now = Date.now();
   const snapshot = await db
@@ -127,10 +143,15 @@ export async function getActivePendingCheck(limit = 50): Promise<Array<TrackingC
 
   const pending: Array<TrackingConfig & { id: string }> = [];
   const interval = FREQUENCY_MS;
+  const force = options?.force === true;
 
   for (const doc of snapshot.docs) {
     if (pending.length >= limit) break;
     const data = doc.data();
+    if (force) {
+      pending.push(docToConfig(doc.id, data));
+      continue;
+    }
     const frequency = data.frequency as TrackingFrequency;
     const minInterval = frequency ? interval[frequency] : FREQUENCY_MS.daily;
     const lastChecked = data.lastChecked as admin.firestore.Timestamp | null;
@@ -180,10 +201,12 @@ export async function updateTracking(
     }
     const update: Record<string, unknown> = {};
     if (data.url !== undefined) update.url = data.url;
+    if (data.instruction !== undefined) update.instruction = data.instruction;
     if (data.criteria !== undefined) update.criteria = data.criteria;
     if (data.email !== undefined) update.email = data.email;
     if (data.frequency !== undefined) update.frequency = data.frequency;
     if (data.active !== undefined) update.active = data.active;
+    if (data.paginationLimit !== undefined) update.paginationLimit = data.paginationLimit;
     transaction.update(ref, update);
   });
 }

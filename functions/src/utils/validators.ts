@@ -47,18 +47,34 @@ export const criteriaSchema = z.object({
     .string()
     .trim()
     .max(64)
-    .optional()
-    .transform((s: string | undefined) => (s === "" || s == null ? undefined : s)),
+    .nullish()
+    .transform((s: string | null | undefined) => (s === "" || s == null ? undefined : s)),
   color: z
     .string()
     .trim()
     .max(64)
-    .optional()
-    .transform((s: string | undefined) => (s === "" || s == null ? undefined : s)),
+    .nullish()
+    .transform((s: string | null | undefined) => (s === "" || s == null ? undefined : s)),
 });
 
 /** Frecuencias permitidas. */
 export const trackingFrequencySchema = z.enum(["hourly", "daily", "weekly"]);
+
+/** Instrucción en lenguaje natural (obligatoria en creación de tracking). */
+export const instructionSchema = z
+  .string()
+  .trim()
+  .min(10, "La instrucción debe tener al menos 10 caracteres")
+  .max(2000, "La instrucción no puede superar 2000 caracteres");
+
+/** Límite de páginas a analizar en paginación (1–20). */
+export const paginationLimitSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(20)
+  .optional()
+  .default(5);
 
 // ─── Validación ──────────────────────────────────────────────────────────────
 
@@ -96,6 +112,30 @@ export function validateTrackingFrequency(
   value: unknown
 ): z.SafeParseReturnType<string, "hourly" | "daily" | "weekly"> {
   return trackingFrequencySchema.safeParse(value);
+}
+
+/**
+ * Valida la instrucción en lenguaje natural.
+ */
+export function validateInstruction(value: unknown): z.SafeParseReturnType<unknown, string> {
+  return instructionSchema.safeParse(value);
+}
+
+/**
+ * Valida paginationLimit (opcional, 1–20). Si no se envía o es inválido, devuelve 5.
+ */
+export function validatePaginationLimit(
+  value: unknown
+): z.SafeParseReturnType<unknown, number> {
+  const raw =
+    value === undefined || value === null
+      ? undefined
+      : typeof value === "string"
+        ? parseInt(value, 10)
+        : value;
+  const toParse =
+    raw === undefined || typeof raw !== "number" || Number.isNaN(raw) ? undefined : raw;
+  return paginationLimitSchema.safeParse(toParse);
 }
 
 // ─── Sanitización ─────────────────────────────────────────────────────────────

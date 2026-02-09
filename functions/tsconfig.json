@@ -12,7 +12,8 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "declaration": true,
-    "declarationMap": true
+    "declarationMap": true,
+    "types": ["node", "jest"]
   },
   "compileOnSave": true,
   "include": ["src"],

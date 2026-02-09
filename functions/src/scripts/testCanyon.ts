@@ -15,14 +15,12 @@ const CREATE_TRACKING_URL =
 
 const PAYLOAD = {
   url: "https://www.canyon.com/es-es/sale/",
-  criteria: {
-    priceMax: 1200,
-    size: "L",
-    color: null,
-  },
-  email: process.env.CREATE_TRACKING_EMAIL ?? "TU_EMAIL_AQUI@gmail.com",
+  instruction:
+    "Quiero que me avises cuando alguna de las bicicletas con talla L tenga un precio inferior a 4.000 euros.",
+  email: process.env.CREATE_TRACKING_EMAIL ?? "basilio.lse@gmail.com",
   frequency: "hourly" as const,
   active: true,
+  paginationLimit: 5,
 };
 
 interface CreateTrackingSuccess {

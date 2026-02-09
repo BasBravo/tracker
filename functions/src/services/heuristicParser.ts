@@ -26,17 +26,28 @@ const PRICE_SELECTORS = [
   ".amount",
   "[data-price]",
   ".price-value",
+  "[class*='price']",
+  "[class*='Price']",
+  ".value",
+  ".product-tile__price",
+  ".productTile__price",
 ];
 
 /** Selectores de nombre de producto. */
 const NAME_SELECTORS = [
   "[itemprop='name']",
   "h1",
+  "h2",
+  "h3",
   ".product-name",
   ".product-title",
   ".product__title",
   ".product-name__title",
   "[data-product-name]",
+  "[class*='productName']",
+  "[class*='product-title']",
+  ".product-tile__title",
+  ".productTile__title",
 ];
 
 /** Selectores de talla. */
@@ -81,6 +92,18 @@ const PRODUCT_CARD_SELECTORS = [
   ".product__card",
   "article.product",
   "[data-product]",
+  ".tile",
+  ".productTile",
+  ".product-tile",
+  "[data-pid]",
+  "[data-product-id]",
+  ".product-grid__item",
+  ".product-grid-item",
+  ".product-list-item",
+  "li[class*='product']",
+  "article[class*='tile']",
+  "[class*='ProductTile']",
+  "[class*='product-tile']",
 ];
 
 function normalizePriceFromString(value: string): number | null {

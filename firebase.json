@@ -14,5 +14,8 @@
         "pnpm --dir \"$RESOURCE_DIR\" run build"
       ]
     }
-  ]
+  ],
+  "firestore": {
+    "indexes": "firestore.indexes.json"
+  }
 }

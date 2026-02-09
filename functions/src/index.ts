@@ -25,9 +25,3 @@ export const scheduledNotifications = region.pubsub
 // ─── HTTP ───────────────────────────────────────────────────────────────────
 
 export const createTracking = region.https.onRequest(withCors(handleCreateTracking));
-
-export const helloWorld = region.https.onRequest(
-  (request: functions.https.Request, response: functions.Response) => {
-    response.send("Hello from Firebase!");
-  }
-);

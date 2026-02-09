@@ -24,6 +24,12 @@ export {
 } from "./heuristicParser";
 
 export {
+  isAiExtractionAvailable,
+  extractProductsWithAi,
+  htmlToPlainText,
+} from "./aiExtractor";
+
+export {
   initializeFirebaseAdmin,
   createTracking,
   getTrackingById,
@@ -34,6 +40,8 @@ export {
   deleteTracking,
   type TrackingDocument,
 } from "./trackingRepository";
+
+export { getNextPageUrl, getDefaultPaginationLimit } from "./paginationHelper";
 
 export {
   saveMatch,

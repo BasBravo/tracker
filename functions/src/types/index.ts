@@ -18,6 +18,7 @@ export type TrackingFrequency = "hourly" | "daily" | "weekly";
 /**
  * Criterios de filtrado para el tracking.
  * Se aplican sobre los productos extraídos (precio máximo, talla, color).
+ * Extraídos por IA a partir de la instrucción en lenguaje natural.
  */
 export interface Criteria {
   /** Precio máximo aceptado (en la moneda del producto). */
@@ -26,16 +27,20 @@ export interface Criteria {
   size?: string;
   /** Color deseado (ej: "negro", "azul"). */
   color?: string;
+  /** Pista de tipo de producto (ej: "bicicletas") para contexto. */
+  productTypeHint?: string;
 }
 
 /**
  * Configuración de un tracking (colección `trackings` en Firestore).
- * Define la URL a rastrear, criterios, email de alerta y frecuencia.
+ * La instrucción en lenguaje natural es la fuente; los criterios se extraen con IA.
  */
 export interface TrackingConfig {
   /** URL pública del producto o listado eCommerce. */
   url: string;
-  /** Criterios de filtrado (precio, talla, color). */
+  /** Instrucción en lenguaje natural del usuario (fuente de verdad). */
+  instruction: string;
+  /** Criterios estructurados extraídos por IA a partir de instruction. */
   criteria: Criteria;
   /** Email donde enviar las alertas. */
   email: string;
@@ -45,6 +50,8 @@ export interface TrackingConfig {
   active: boolean;
   /** Timestamp de la última comprobación. */
   lastChecked: AppTimestamp | null;
+  /** Número máximo de páginas a analizar por ejecución (paginación). Por defecto 5. */
+  paginationLimit?: number;
 }
 
 /**
@@ -173,6 +180,12 @@ export function validateCriteria(value: unknown): ValidationResult<Criteria> {
     }
     criteria.color = obj.color.trim() || undefined;
   }
+  if (obj.productTypeHint !== undefined) {
+    if (typeof obj.productTypeHint !== "string") {
+      return { success: false, errors: ["criteria.productTypeHint debe ser un string"] };
+    }
+    criteria.productTypeHint = obj.productTypeHint.trim() || undefined;
+  }
 
   return { success: true, data: criteria };
 }
@@ -199,8 +212,48 @@ export function isValidUrl(value: unknown): value is string {
   }
 }
 
+const MAX_INSTRUCTION_LENGTH = 2000;
+const MIN_INSTRUCTION_LENGTH = 10;
+const DEFAULT_PAGINATION_LIMIT = 5;
+const MAX_PAGINATION_LIMIT = 20;
+
+/**
+ * Valida que la instrucción en lenguaje natural sea válida.
+ */
+export function validateInstruction(value: unknown): ValidationResult<string> {
+  if (typeof value !== "string") {
+    return { success: false, errors: ["instruction debe ser un string"] };
+  }
+  const trimmed = value.trim();
+  if (trimmed.length < MIN_INSTRUCTION_LENGTH) {
+    return { success: false, errors: [`instruction debe tener al menos ${MIN_INSTRUCTION_LENGTH} caracteres`] };
+  }
+  if (trimmed.length > MAX_INSTRUCTION_LENGTH) {
+    return { success: false, errors: [`instruction no puede superar ${MAX_INSTRUCTION_LENGTH} caracteres`] };
+  }
+  return { success: true, data: trimmed };
+}
+
+/**
+ * Valida paginationLimit (opcional, 1–MAX_PAGINATION_LIMIT).
+ */
+export function validatePaginationLimit(value: unknown): ValidationResult<number> {
+  if (value === undefined || value === null) {
+    return { success: true, data: DEFAULT_PAGINATION_LIMIT };
+  }
+  const num = typeof value === "string" ? parseInt(value, 10) : value;
+  if (typeof num !== "number" || Number.isNaN(num)) {
+    return { success: false, errors: ["paginationLimit debe ser un número"] };
+  }
+  if (num < 1 || num > MAX_PAGINATION_LIMIT) {
+    return { success: false, errors: [`paginationLimit debe estar entre 1 y ${MAX_PAGINATION_LIMIT}`] };
+  }
+  return { success: true, data: num };
+}
+
 /**
  * Valida una configuración de tracking (sin lastChecked, que lo asigna el backend).
+ * Usado internamente para el documento completo (url, instruction, criteria, email, etc.).
  */
 export function validateTrackingConfig(
   value: unknown
@@ -216,11 +269,15 @@ export function validateTrackingConfig(
   if (!obj.url || !isValidUrl(obj.url)) {
     errors.push("url es obligatoria y debe ser una URL http(s) válida");
   }
-  const criteriaResult = validateCriteria(obj.criteria);
+  const instructionResult = validateInstruction(obj.instruction);
+  if (!instructionResult.success && instructionResult.errors) {
+    errors.push(...instructionResult.errors);
+  }
+  const criteriaResult = validateCriteria(obj.criteria ?? {});
   if (!criteriaResult.success && criteriaResult.errors) {
     errors.push(...criteriaResult.errors);
   }
-  if (typeof obj.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(obj.email.trim())) {
+  if (typeof obj.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((obj.email as string).trim())) {
     errors.push("email es obligatorio y debe ser un email válido");
   }
   if (!isValidFrequency(obj.frequency)) {
@@ -229,21 +286,27 @@ export function validateTrackingConfig(
   if (typeof obj.active !== "boolean") {
     errors.push("active debe ser un booleano");
   }
+  const paginationResult = validatePaginationLimit(obj.paginationLimit);
+  if (!paginationResult.success && paginationResult.errors) {
+    errors.push(...paginationResult.errors);
+  }
 
   if (errors.length > 0) {
     return { success: false, errors };
   }
 
-  return {
-    success: true,
-    data: {
-      url: (obj.url as string).trim(),
-      criteria: criteriaResult.data!,
-      email: (obj.email as string).trim(),
-      frequency: obj.frequency as TrackingFrequency,
-      active: obj.active as boolean,
-    },
+  const data: Omit<TrackingConfig, "lastChecked"> = {
+    url: (obj.url as string).trim(),
+    instruction: instructionResult.data!,
+    criteria: criteriaResult.data!,
+    email: (obj.email as string).trim(),
+    frequency: obj.frequency as TrackingFrequency,
+    active: obj.active as boolean,
   };
+  if (paginationResult.data != null) {
+    data.paginationLimit = paginationResult.data;
+  }
+  return { success: true, data };
 }
 
 /**

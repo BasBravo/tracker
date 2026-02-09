@@ -68,13 +68,17 @@ function evaluatePrice(product: Product, criteria: Criteria): { pass: boolean; s
 
 /**
  * Comprueba coincidencia de talla (exacta o equivalente: L/Large, 42, etc.).
+ * Si el producto no tiene size pero el criterio sí, se considera "talla desconocida"
+ * y se pasa con score 0.5 para no descartar productos que sí cumplen precio (p. ej. Canyon).
  */
 function evaluateSize(product: Product, criteria: Criteria): { pass: boolean; score: number } {
   const wanted = criteria.size?.trim();
   if (!wanted) return { pass: true, score: 1 };
 
   const productSize = product.size?.trim();
-  if (!productSize) return { pass: false, score: 0 };
+  if (!productSize) {
+    return { pass: true, score: 0.5 };
+  }
 
   const w = normalizeForCompare(wanted);
   const p = normalizeForCompare(productSize);

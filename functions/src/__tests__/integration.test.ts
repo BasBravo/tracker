@@ -84,6 +84,7 @@ const runIntegration = process.env.RUN_INTEGRATION_TESTS === "1";
 
     const tracking = await createTracking({
       url: TEST_URL,
+      instruction: "Quiero que me avises cuando haya productos talla L por menos de 100 euros en negro.",
       email: TEST_EMAIL,
       criteria: { priceMax: 100, size: "L", color: "negro" },
       frequency: "daily",
@@ -94,6 +95,7 @@ const runIntegration = process.env.RUN_INTEGRATION_TESTS === "1";
     expect(tracking.id).toBeDefined();
     expect(tracking.url).toBe(TEST_URL);
     expect(tracking.email).toBe(TEST_EMAIL);
+    expect(tracking.instruction).toBeDefined();
 
     await runScheduledTrackingCheck();
 
@@ -132,6 +134,7 @@ const runIntegration = process.env.RUN_INTEGRATION_TESTS === "1";
 
     const tracking = await createTracking({
       url: TEST_URL,
+      instruction: "Avísame de ofertas por menos de 100 euros.",
       email: TEST_EMAIL,
       criteria: { priceMax: 100 },
       frequency: "daily",

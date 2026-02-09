@@ -7,30 +7,30 @@ Sistema de **tracking de ofertas eCommerce** con backend en **Firebase Functions
 ## Arquitectura del sistema
 
 ```
-                    ┌─────────────────────────────────────────────────────────┐
-                    │                     Firebase / GCP                        │
-  Usuario           │                                                           │
-     │              │   Cloud Scheduler (cron)                                  │
-     │              │        │ hourly: scheduledTrackingCheck                   │
-     │              │        │ */30 min: scheduledNotifications                 │
-     ▼              │        ▼                                                   │
-  Frontend ────────►│   Cloud Functions                                          │
-  (API HTTP)        │        │                                                    │
-                    │        ├── createTracking (POST) → Firestore trackings     │
-                    │        ├── scheduledTrackingCheck                          │
-                    │        │      │ fetch HTML → schema/heuristic → criteria   │
-                    │        │      └──► Firestore matches + update lastChecked  │
-                    │        └── scheduledNotifications                           │
-                    │              │ getUnnotifiedMatches → sendAlertEmail       │
-                    │              └── markAsNotified                             │
-                    │                                                             │
-                    │   Firestore: trackings, matches                            │
-                    │   (opcional) SMTP → envío de emails                        │
-                    └─────────────────────────────────────────────────────────┘
+                    ┌──────────────────────────────────────────────────────────────────┐
+                    │                     Firebase / GCP                               │
+  Usuario           │                                                                  │
+     │              │   Cloud Scheduler (cron)                                         │
+     │              │        │ hourly: scheduledTrackingCheck                          │
+     │              │        │ */30 min: scheduledNotifications                        │
+     ▼              │        ▼                                                         │
+  Frontend ────────►│   Cloud Functions                                                │
+  (API HTTP)        │        │                                                         │
+                    │        ├── createTracking (POST) → Firestore trackings           │
+                    │        ├── scheduledTrackingCheck                                │
+                    │        │      │ fetch HTML → schema → heuristic → IA (Gemini)    │
+                    │        │      └──► Firestore matches + update lastChecked        │
+                    │        └── scheduledNotifications                                │
+                    │              │ getUnnotifiedMatches → sendAlertEmail             │
+                    │              └── markAsNotified                                  │
+                    │                                                                  │
+                    │   Firestore: trackings, matches                                  │
+                    │   (opcional) SMTP → envío de emails                              │
+                    └──────────────────────────────────────────────────────────────────┘
 ```
 
-- **createTracking**: el cliente envía URL + criterios + email; se guarda en Firestore.
-- **scheduledTrackingCheck**: cada hora procesa trackings pendientes, descarga HTML, extrae productos (schema.org o heurísticas), aplica criterios, guarda matches y actualiza `lastChecked`.
+- **createTracking**: el cliente envía URL + instrucción en lenguaje natural + email; la IA extrae criterios y se guarda en Firestore.
+- **scheduledTrackingCheck**: cada hora procesa trackings pendientes, descarga HTML, extrae productos (schema.org → heurísticas → **IA Gemini** si sigue vacío), aplica criterios, guarda matches y actualiza `lastChecked`.
 - **scheduledNotifications**: cada 30 min agrupa matches no notificados por tracking, envía un email por grupo y marca como notificado.
 
 ---
@@ -110,6 +110,16 @@ Variables usadas por el código:
 | `SMTP_PASS`    | Contraseña o app password             | `***`                |
 | `FROM_EMAIL`   | Remitente de las alertas             | `tracker@midominio.com` |
 
+**IA (extracción semántica, fallback cuando no hay schema ni heurísticas):**
+
+| Variable                    | Descripción                                                                 | Ejemplo              |
+|-----------------------------|-----------------------------------------------------------------------------|----------------------|
+| `VERTEX_AI_LOCATION`       | Región Vertex AI (mismo proyecto GCP). Si se define, se usa Vertex.          | `europe-west1`       |
+| `GEMINI_API_KEY`           | (Opcional) API key de [Google AI Studio](https://aistudio.google.com). Tier gratuito. | `***`        |
+| `GEMINI_EXTRACTION_ENABLED`| Desactivar fallback IA: `false`                                            | `true` (por defecto)  |
+
+Sin `VERTEX_AI_LOCATION` ni `GEMINI_API_KEY`, el fallback por IA no se ejecuta. Ver [PLAN.md](./PLAN.md) para costes y detalles.
+
 No subas `.env` al repositorio (está en `.gitignore`).
 
 ### En producción (Firebase)
@@ -151,6 +161,112 @@ Tras el deploy, en la consola de Firebase aparecen las funciones (p. ej. `create
 
 ---
 
+## Cómo probar el sistema
+
+### 1. Tests unitarios (sin servicios externos)
+
+```bash
+cd functions
+pnpm test
+```
+
+Ejecuta los tests de schema, heurísticas y criterios. No requiere Firestore ni IA.
+
+### 2. Tests de integración (con emulador Firestore)
+
+En un terminal, arranca el emulador:
+
+```bash
+firebase emulators:start --only firestore
+```
+
+En otro terminal:
+
+```bash
+cd functions
+pnpm run test:integration
+```
+
+Comprueba el flujo completo: crear tracking → job de chequeo (HTML mockeado) → matches en Firestore → notificación (email mockeado).
+
+### 3. Crear un tracking real (API)
+
+Necesitas el proyecto desplegado o el emulador local.
+
+**Opción A – Contra función desplegada**
+
+Obtén la URL de `createTracking` en Firebase Console → Functions, o:
+
+`https://europe-west3-TU_PROJECT_ID.cloudfunctions.net/createTracking`
+
+```bash
+curl -X POST "https://europe-west3-TU_PROJECT_ID.cloudfunctions.net/createTracking" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.canyon.com/es-es/sale/",
+    "instruction": "Quiero que me avises cuando alguna bicicleta talla L baje de 2000 euros.",
+    "email": "tu-email@ejemplo.com",
+    "frequency": "daily",
+    "active": true,
+    "paginationLimit": 5
+  }'
+```
+
+**Opción B – Script de prueba Canyon (recomendado la primera vez)**
+
+El script ya envía `url` + `instruction` y usa tu `.env` (proyecto y opcionalmente IA):
+
+```bash
+cd functions
+cp .env.example .env
+# Edita .env: PROJECT_ID (o PROJECT_ID), y si quieres IA: GEMINI_API_KEY o VERTEX_AI_LOCATION
+# Opcional: CREATE_TRACKING_EMAIL=tu@email.com
+pnpm run test:canyon
+```
+
+Si la función está desplegada, por defecto hace POST a esa URL. Para apuntar a otra:
+
+```bash
+CREATE_TRACKING_URL=https://europe-west3-otro-proyecto.cloudfunctions.net/createTracking pnpm run test:canyon
+```
+
+La respuesta incluye el `trackingId` creado.
+
+### 4. Ejecutar el chequeo de trackings a mano (run-jobs)
+
+El scheduler en producción corre cada hora. Para probar sin esperar:
+
+```bash
+cd functions
+# .env con PROJECT_ID (o PROJECT_ID) del proyecto donde están los trackings
+pnpm run run-jobs
+```
+
+Esto ejecuta `scheduledTrackingCheck` y `scheduledNotifications` contra Firestore real. Descarga las URLs de los trackings activos, extrae productos (schema → heurística → IA si está configurada), aplica criterios, guarda matches y envía emails si hay SMTP configurado.
+
+### 5. Ver trackings en Firestore
+
+```bash
+cd functions
+pnpm run list-trackings
+```
+
+Lista todos los trackings del proyecto (url, instruction, email, frequency, lastChecked). Útil para comprobar que `test:canyon` o el POST crearon el documento.
+
+### 6. Resumen rápido
+
+| Objetivo | Comando |
+|----------|--------|
+| Tests unitarios | `pnpm test` |
+| Tests integración | Emulador Firestore + `pnpm run test:integration` |
+| Crear tracking (Canyon) | Configurar `.env` y `pnpm run test:canyon` |
+| Ejecutar jobs a mano | `pnpm run run-jobs` |
+| Listar trackings | `pnpm run list-trackings` |
+
+Para que la **IA** extraiga criterios de la instrucción y/o productos de la página, en `functions/.env` define **GEMINI_API_KEY** (o **VERTEX_AI_LOCATION** + proyecto con Vertex). Sin ello, la creación de tracking usará criterios vacíos `{}` y el chequeo no usará fallback IA para extraer productos.
+
+---
+
 ## Ejemplos de uso de la API
 
 ### Base URL
@@ -163,31 +279,29 @@ Tras el deploy, la URL base es:
 
 ### Crear un tracking (POST)
 
-**Endpoint:** `POST /createTracking`  
-**Headers:** `Content-Type: application/json`  
+**Endpoint:** `POST /createTracking`
+**Headers:** `Content-Type: application/json`
 **CORS:** permitido (cabeceras configuradas en el handler).
 
 **Body:**
 
 ```json
 {
-  "url": "https://example.com/ofertas-camiseta",
+  "url": "https://www.canyon.com/es-es/sale/",
+  "instruction": "Quiero que me avises cuando alguna de las bicicletas con talla L tenga un precio inferior a 2.000 euros.",
   "email": "usuario@ejemplo.com",
-  "criteria": {
-    "priceMax": 80,
-    "size": "L",
-    "color": "negro"
-  },
   "frequency": "daily",
-  "active": true
+  "active": true,
+  "paginationLimit": 5
 }
 ```
 
-- **url** (obligatorio): URL http(s) de la página a rastrear.  
-- **email** (obligatorio): email donde recibir alertas.  
-- **criteria** (opcional): `priceMax` (número), `size`, `color` (strings).  
-- **frequency** (opcional): `"hourly"` \| `"daily"` \| `"weekly"` (por defecto `"daily"`).  
+- **url** (obligatorio): URL http(s) de la página a rastrear.
+- **instruction** (obligatorio): instrucción en lenguaje natural; la IA extrae criterios (precio máximo, talla, color, etc.).
+- **email** (obligatorio): email donde recibir alertas.
+- **frequency** (opcional): `"hourly"` \| `"daily"` \| `"weekly"` (por defecto `"daily"`).
 - **active** (opcional): `true` \| `false` (por defecto `true`).
+- **paginationLimit** (opcional): número de páginas a analizar por ejecución (1–20, por defecto 5).
 
 **Ejemplo con curl:**
 
@@ -195,9 +309,9 @@ Tras el deploy, la URL base es:
 curl -X POST "https://REGION-PROJECT_ID.cloudfunctions.net/createTracking" \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://example.com/producto",
+    "url": "https://www.canyon.com/es-es/sale/",
+    "instruction": "Avísame cuando haya bicis talla L por menos de 2000 euros.",
     "email": "alerta@ejemplo.com",
-    "criteria": { "priceMax": 50, "size": "M", "color": "azul" },
     "frequency": "daily"
   }'
 ```
@@ -215,11 +329,11 @@ curl -X POST "https://REGION-PROJECT_ID.cloudfunctions.net/createTracking" \
 ```json
 {
   "error": "Validation failed",
-  "details": { "url": "Debe ser una URL válida (http o https)" }
+  "details": { "instruction": "La instrucción debe tener al menos 10 caracteres" }
 }
 ```
 
-**Respuesta 405:** método no permitido (solo POST).  
+**Respuesta 405:** método no permitido (solo POST).
 **Respuesta 500:** error interno (p. ej. Firestore).
 
 ---

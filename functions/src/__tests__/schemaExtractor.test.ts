@@ -5,7 +5,6 @@
 import {
   extractProductsFromHtml,
   computeConfidenceScore,
-  type ExtractedProduct,
 } from "../services/schemaExtractor";
 import type { Product } from "../types";
 import {
