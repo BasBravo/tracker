@@ -133,5 +133,27 @@ describe("criteriaAnalyzer", () => {
       expect(result).toHaveLength(1);
       expect(result[0].confidenceScore).toBeGreaterThanOrEqual(0.7);
     });
+
+    it("excluye bicicletas con precio imposible (productTypeHint + price < 100)", () => {
+      const products: Product[] = [
+        { ...productBase, name: "Inflite CF SL 5", price: 7, size: "L" },
+        { ...productBase, name: "Spectral 125 AL 5", price: 1799, size: "L", url: "https://example.com/2" },
+      ];
+      const criteria: Criteria = { priceMax: 2000, size: "L", productTypeHint: "bicicletas" };
+      const result = findMatches(products, criteria);
+      expect(result).toHaveLength(1);
+      expect(result[0].product.price).toBe(1799);
+    });
+
+    it("respeta priceMin cuando viene en criterios (ej. inferido por IA)", () => {
+      const products: Product[] = [
+        { ...productBase, name: "Zapato low cost", price: 5, url: "https://example.com/1" },
+        { ...productBase, name: "Zapatilla running", price: 89, url: "https://example.com/2" },
+      ];
+      const criteria: Criteria = { priceMax: 100, priceMin: 15 };
+      const result = findMatches(products, criteria);
+      expect(result).toHaveLength(1);
+      expect(result[0].product.price).toBe(89);
+    });
   });
 });

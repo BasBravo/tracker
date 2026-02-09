@@ -63,6 +63,37 @@ describe("heuristicParser", () => {
       expect(result[0].confidenceScore).toBeGreaterThanOrEqual(0.5);
       expect(result[0].confidenceScore).toBeLessThanOrEqual(0.7);
     });
+
+    it("prioriza precio en contexto €/EUR y no usa códigos de modelo (ej. RX810)", () => {
+      const html = `
+      <div class="product-card">
+        <h2 class="product-name">Roadlite:ONfly 7</h2>
+        <p>Shimano GRX RX810 GS</p>
+        <span class="price">2.499 €</span>
+        <span class="old-price">3.499 €</span>
+        <a href="/bike/1">Ver</a>
+      </div>`;
+      const result = extractProductsHeuristic(html, PAGE_URL);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe("Roadlite:ONfly 7");
+      expect(result[0].price).toBe(2499);
+    });
+
+    it("no usa 'Ahorra hasta X €' como precio; usa el precio real (ej. Desde 4.199 €)", () => {
+      const html = `
+      <div class="product-card">
+        <h2 class="product-name">Strive:ON CFR Underdog</h2>
+        <p>Desde 4.199 €</p>
+        <p>Precio original Desde 5.499 €</p>
+        <p>Ahorra hasta 1.300 €</p>
+        <p>Financiación a partir de 70 €/mes.</p>
+        <a href="/bike/3428">Ver</a>
+      </div>`;
+      const result = extractProductsHeuristic(html, PAGE_URL);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe("Strive:ON CFR Underdog");
+      expect(result[0].price).toBe(4199);
+    });
   });
 
   describe("extractWithFallback", () => {

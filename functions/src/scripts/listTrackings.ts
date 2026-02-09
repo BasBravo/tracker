@@ -8,7 +8,7 @@
 import { initializeFirebaseAdmin, listTrackings, getActivePendingCheck } from "../services/trackingRepository";
 
 async function main(): Promise<void> {
-  const projectId = process.env.PROJECT_ID ?? process.env.PROJECT_ID;
+  const projectId = process.env.PROJECT_ID;
   console.log("Proyecto:", projectId ?? "(cuenta de servicio)");
   console.log("");
 

@@ -117,6 +117,7 @@ Variables usadas por el código:
 | `VERTEX_AI_LOCATION`       | Región Vertex AI (mismo proyecto GCP). Si se define, se usa Vertex.          | `europe-west1`       |
 | `GEMINI_API_KEY`           | (Opcional) API key de [Google AI Studio](https://aistudio.google.com). Tier gratuito. | `***`        |
 | `GEMINI_EXTRACTION_ENABLED`| Desactivar fallback IA: `false`                                            | `true` (por defecto)  |
+| `GEMINI_RELEVANCE_FILTER_ENABLED` | Desactivar filtro de relevancia sobre matches: `false` (por defecto activo). Reduce falsos positivos en el email. |
 
 Sin `VERTEX_AI_LOCATION` ni `GEMINI_API_KEY`, el fallback por IA no se ejecuta. Ver [PLAN.md](./PLAN.md) para costes y detalles.
 
@@ -219,7 +220,7 @@ El script ya envía `url` + `instruction` y usa tu `.env` (proyecto y opcionalme
 ```bash
 cd functions
 cp .env.example .env
-# Edita .env: PROJECT_ID (o PROJECT_ID), y si quieres IA: GEMINI_API_KEY o VERTEX_AI_LOCATION
+# Edita .env: PROJECT_ID, y si quieres IA: GEMINI_API_KEY o VERTEX_AI_LOCATION
 # Opcional: CREATE_TRACKING_EMAIL=tu@email.com
 pnpm run test:canyon
 ```
@@ -238,7 +239,7 @@ El scheduler en producción corre cada hora. Para probar sin esperar:
 
 ```bash
 cd functions
-# .env con PROJECT_ID (o PROJECT_ID) del proyecto donde están los trackings
+# .env con PROJECT_ID del proyecto donde están los trackings
 pnpm run run-jobs
 ```
 

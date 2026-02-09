@@ -8,6 +8,9 @@ import type { Criteria, Product } from "../types";
 /** Score mínimo para considerar un match (inclusive). */
 const MIN_MATCH_SCORE = 0.7;
 
+/** Fallback de precio mínimo cuando productTypeHint es "bicicletas" y la IA no devolvió priceMin (trackings antiguos). */
+const FALLBACK_PRICE_MIN_BICYCLES_EUR = 100;
+
 /** Peso de cada criterio en el score final (deben sumar 1). */
 const WEIGHT_PRICE = 0.4;
 const WEIGHT_SIZE = 0.3;
@@ -52,9 +55,16 @@ function textMatches(criteriaValue: string, productValue: string): boolean {
 }
 
 /**
- * Comprueba si el producto cumple el criterio de precio (precio <= priceMax).
+ * Comprueba si el producto cumple el criterio de precio (priceMin <= precio <= priceMax).
+ * priceMin puede venir de la IA (inferido por tipo de producto) o fallback para bicicletas.
  */
 function evaluatePrice(product: Product, criteria: Criteria): { pass: boolean; score: number } {
+  const min =
+    criteria.priceMin ??
+    (criteria.productTypeHint?.toLowerCase().trim() === "bicicletas" ? FALLBACK_PRICE_MIN_BICYCLES_EUR : undefined);
+  if (min != null && product.price < min) {
+    return { pass: false, score: 0 };
+  }
   const max = criteria.priceMax;
   if (max == null || typeof max !== "number") {
     return { pass: true, score: 1 };

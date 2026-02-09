@@ -145,9 +145,10 @@ Para cada tracking activo:
    - IA como refuerzo solo si hace falta y con límite (p. ej. un único fragmento resumido de la página o un subconjunto de productos) para no disparar costes.
 3. **Paginación:** si se detecta que la página tiene “siguiente página” (enlaces, parámetros, etc.), cargar hasta `paginationLimit` páginas adicionales y repetir extracción en cada una, acumulando productos sin duplicados.
 4. **Normalización** de productos (precio, talla, color, URL).
-5. **Evaluación de criterios** sobre los productos normalizados (precio ≤ X, talla = L, etc.).
-6. **Generación de matches** con score y persistencia.
-7. **Notificación por email** cuando haya nuevos matches según la lógica actual.
+5. **Filtro por tipo de producto (opcional):** si `criteria.productTypeHint` está definido (p. ej. "bicicletas"), una llamada a IA acotada filtra la lista para quedarse solo con productos que corresponden a ese tipo (y excluir accesorios/componentes de otra categoría que aparezcan en la misma página). Así se evitan alertas por productos no deseados (ej. pedales o sillines cuando el usuario pidió bicicletas).
+6. **Evaluación de criterios** sobre los productos (precio ≤ X, talla = L, etc.).
+7. **Generación de matches** con score y persistencia.
+8. **Notificación por email** cuando haya nuevos matches según la lógica actual.
 
 ---
 
@@ -155,11 +156,12 @@ Para cada tracking activo:
 
 La IA es la **protagonista** en la interpretación de la intención del usuario, pero su uso debe estar **muy acotado** para controlar peticiones y costes.
 
-### Dos puntos de uso de IA
+### Tres puntos de uso de IA
 
 | Momento | Uso | Acotación |
 |--------|-----|-----------|
 | **Creación/actualización de tracking** | Una llamada para: instrucción → criterios estructurados (JSON). | 1 llamada por creación/actualización. Prompt fijo, respuesta acotada (solo criterios). |
+| **Filtro por tipo de producto** | Si `productTypeHint` está en criterios: una llamada que recibe la lista de productos (nombre, precio, URL) y devuelve solo las URLs que corresponden al tipo (p. ej. bicicletas y no accesorios). | 1 llamada por tracking por ejecución, solo cuando hay productTypeHint. Lista acotada (ej. 150 productos). Compatible con cualquier e-commerce y cualquier tipología. |
 | **Análisis de página** | Solo si schema y heurísticas no devuelven productos suficientes o la página es atípica. | Límite por ejecución: p. ej. 1 llamada por run del job, o un máximo de tokens/fragmento. No enviar HTML completo sin control. |
 
 ### Modelo y proveedor
@@ -171,16 +173,19 @@ La IA es la **protagonista** en la interpretación de la intención del usuario,
 
 | Variable / contexto | Uso |
 |---------------------|-----|
-| `PROJECT_ID` | Proyecto GCP (Firebase). |
+| `PROJECT_ID` | Proyecto GCP (scripts locales). En deploy no usar `PROJECT_ID` en .env (reservado). |
 | `VERTEX_AI_LOCATION` | Región Vertex (ej. `europe-west1`). |
 | `GEMINI_API_KEY` | (Opcional) API key Google AI Studio si no se usa Vertex. |
 | `GEMINI_EXTRACTION_ENABLED` | Activar uso de IA en extracción de página (por defecto `true` con límites). |
 | `GEMINI_CRITERIA_EXTRACTION_ENABLED` | Activar extracción de criterios desde instrucción (por defecto `true`). |
+| `GEMINI_PRODUCT_TYPE_FILTER_ENABLED` | Desactivar filtro por tipo de producto: `false` (por defecto `true` si IA disponible). |
+| `GEMINI_RELEVANCE_FILTER_ENABLED` | Desactivar filtro de relevancia sobre matches: `false` (por defecto `true` si IA disponible). Reduce falsos positivos (precio/talla erróneos, componentes vs producto completo). |
 | Límites por run | Máximo de páginas paginadas, máximo de llamadas IA por job, máximo de tokens por llamada (definidos en código o config). |
 
 ### Costes
 
 - **Extracción de criterios:** 1 llamada por tracking al crear/actualizar; impacto bajo.
+- **Filtro por tipo de producto:** 1 llamada por tracking por ejecución cuando hay `productTypeHint`; entrada acotada (lista de productos).
 - **Extracción de página:** solo cuando sea necesario y con tope por ejecución (p. ej. 1 llamada por tracking por run, o solo cuando schema + heurísticas fallen).
 - Uso de **Gemini 2.0 Flash** y límites estrictos mantiene costes predecibles.
 

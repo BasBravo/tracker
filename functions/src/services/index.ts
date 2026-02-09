@@ -27,6 +27,10 @@ export {
   isAiExtractionAvailable,
   extractProductsWithAi,
   htmlToPlainText,
+  isProductTypeFilterAvailable,
+  filterProductsByType,
+  isRelevanceFilterAvailable,
+  filterMatchesByRelevance,
 } from "./aiExtractor";
 
 export {

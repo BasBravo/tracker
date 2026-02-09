@@ -17,6 +17,9 @@ import { getNextPageUrl } from "../services/paginationHelper";
 import {
   isAiExtractionAvailable,
   extractProductsWithAi,
+  filterProductsByType,
+  isRelevanceFilterAvailable,
+  filterMatchesByRelevance,
 } from "../services/aiExtractor";
 import { findMatches } from "../services/criteriaAnalyzer";
 import { saveMatch } from "../services/matchRepository";
@@ -55,7 +58,7 @@ export async function runScheduledTrackingCheck(): Promise<void> {
   let errors = 0;
   let totalMatches = 0;
 
-  const projectId = process.env.PROJECT_ID ?? process.env.PROJECT_ID;
+  const projectId = process.env.PROJECT_ID;
   const forceCheck = process.env.FORCE_CHECK === "1";
   log("run_config", { runId, projectId: projectId ?? "(usa proyecto de la cuenta de servicio)", forceCheck });
 
@@ -119,7 +122,28 @@ export async function runScheduledTrackingCheck(): Promise<void> {
         continue;
       }
 
-      const matches = findMatches(allProducts, tracking.criteria);
+      let productsToMatch = allProducts;
+      const productTypeHint = tracking.criteria?.productTypeHint?.trim();
+      if (productTypeHint) {
+        log("tracking_type_filter_start", { runId, trackingId, productTypeHint, totalProducts: allProducts.length });
+        productsToMatch = await filterProductsByType(
+          allProducts,
+          productTypeHint,
+          tracking.instruction
+        );
+        log("tracking_type_filter_done", {
+          runId,
+          trackingId,
+          afterFilter: productsToMatch.length,
+        });
+      }
+
+      let matches = findMatches(productsToMatch, tracking.criteria);
+      if (matches.length > 0 && isRelevanceFilterAvailable()) {
+        log("tracking_relevance_filter_start", { runId, trackingId, matchesBefore: matches.length });
+        matches = await filterMatchesByRelevance(matches, tracking.criteria, tracking.instruction);
+        log("tracking_relevance_filter_done", { runId, trackingId, matchesAfter: matches.length });
+      }
       const now = admin.firestore.Timestamp.now();
       let saved = 0;
       for (const m of matches) {
@@ -138,6 +162,7 @@ export async function runScheduledTrackingCheck(): Promise<void> {
         runId,
         trackingId,
         productsFound: allProducts.length,
+        productsAfterTypeFilter: productTypeHint ? productsToMatch.length : undefined,
         pagesFetched,
         matchesFound: matches.length,
         matchesSaved: saved,

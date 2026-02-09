@@ -23,6 +23,8 @@ export type TrackingFrequency = "hourly" | "daily" | "weekly";
 export interface Criteria {
   /** Precio máximo aceptado (en la moneda del producto). */
   priceMax?: number;
+  /** Precio mínimo razonable (inferido por IA según tipo de producto; filtra ruido de extracción). */
+  priceMin?: number;
   /** Talla deseada (ej: "S", "M", "L", "42"). */
   size?: string;
   /** Color deseado (ej: "negro", "azul"). */
@@ -167,6 +169,12 @@ export function validateCriteria(value: unknown): ValidationResult<Criteria> {
       return { success: false, errors: ["criteria.priceMax debe ser un número >= 0"] };
     }
     criteria.priceMax = obj.priceMax;
+  }
+  if (obj.priceMin !== undefined) {
+    if (typeof obj.priceMin !== "number" || obj.priceMin < 0) {
+      return { success: false, errors: ["criteria.priceMin debe ser un número >= 0"] };
+    }
+    criteria.priceMin = obj.priceMin;
   }
   if (obj.size !== undefined) {
     if (typeof obj.size !== "string") {

@@ -106,6 +106,9 @@ const PRODUCT_CARD_SELECTORS = [
   "[class*='product-tile']",
 ];
 
+/**
+ * Normaliza string de precio a número. Soporta formato europeo (1.799 = 1799) y decimal (29,99).
+ */
 function normalizePriceFromString(value: string): number | null {
   const cleaned = value.replace(PRICE_CLEAN_REGEX, "").trim();
   if (!cleaned) return null;
@@ -113,7 +116,14 @@ function normalizePriceFromString(value: string): number | null {
   let numStr: string;
   if (parts.length > 1) {
     const decimals = parts.pop()!;
-    numStr = parts.join("").replace(/\s/g, "") + "." + decimals;
+    const rest = parts.join("").replace(/\s/g, "");
+    if (decimals.length === 2) {
+      numStr = rest + "." + decimals;
+    } else if (decimals.length === 3 && rest.length <= 4) {
+      numStr = rest + decimals;
+    } else {
+      numStr = rest + "." + decimals;
+    }
   } else {
     numStr = cleaned.replace(/\s/g, "");
   }
@@ -148,6 +158,124 @@ function firstAttr($: cheerio.CheerioAPI, selectors: string[], attr: string, roo
     }
   }
   return undefined;
+}
+
+/** Patrones para extraer talla desde texto de disponibilidad (Canyon y similares). */
+const SIZE_FROM_AVAILABILITY_REGEXES = [
+  /Disponible para comprar en\s+([A-Z0-9]+)/i,
+  /Solo disponible en talla\s+([A-Z0-9]+)/i,
+  /Solo disponible en talla\s+([A-Z0-9]+)\s*\|\s*[A-Z0-9]+/i,
+  /talla\s+([A-Z0-9]+)\s*(?:\||\||y|,)/i,
+  /(?:size|talla|talle)[:\s]+([A-Z0-9]+)/i,
+  /\b(3XS|2XS|XS|S|M|L|XL|2XL)\b/,
+];
+
+/**
+ * Extrae talla desde el texto de una card (ej. "Disponible para comprar en L", "Solo disponible en talla L | XL").
+ */
+function getSizeFromAvailabilityText(cardText: string): string | undefined {
+  const normalized = cardText.replace(/\s+/g, " ").trim();
+  for (const re of SIZE_FROM_AVAILABILITY_REGEXES) {
+    const m = normalized.match(re);
+    if (m && m[1]) {
+      const size = m[1].trim();
+      if (size.length <= 4) return size;
+    }
+  }
+  return undefined;
+}
+
+/** Regex para encontrar números que parecen precios (ej. 1.799 o 2.499,99). */
+const PRICE_NUMBER_REGEX = /(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)/g;
+
+/**
+ * Números que van seguidos de " €" o " EUR" (precio explícito). Excluye "X €/mes".
+ * Evita capturar códigos de modelo (ej. "RX810") o otros dígitos que no son precio.
+ */
+const PRICE_WITH_CURRENCY_REGEX =
+  /(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)\s*(?:€|EUR)(?!\s*\/\s*mes)/gi;
+
+/** Precio mínimo razonable para no confundir con cantidades o tallas (ej. "1" en "Card 1"). */
+const MIN_REASONABLE_PRICE = 5;
+/** Precio mínimo para considerar "precio principal" (evita cuotas "desde X €/mes" y números de modelo). */
+const MIN_MAIN_PRICE_EUR = 100;
+
+/**
+ * Comprueba si el número en cardText en (startIndex, startIndex+matchLen) está en contexto de cuota mensual.
+ */
+function isMonthlyPaymentContext(cardText: string, startIndex: number, matchLen: number): boolean {
+  const after = cardText.slice(startIndex + matchLen, startIndex + matchLen + 20);
+  const before = cardText.slice(Math.max(0, startIndex - 12), startIndex);
+  if (/\s*€\s*\/\s*mes/i.test(after) || /\s*€\s*\/\s*month/i.test(after)) return true;
+  if (/desde\s+$/i.test(before)) return true;
+  return false;
+}
+
+/**
+ * Comprueba si el número en numberStartIndex está en contexto de "ahorro" (ej. "Ahorra hasta 1.300 €").
+ * Esos valores no son el precio del producto y no deben usarse.
+ */
+function isSavingsContext(cardText: string, numberStartIndex: number): boolean {
+  const before = cardText.slice(Math.max(0, numberStartIndex - 35), numberStartIndex);
+  return /(?:ahorra\s+hasta\s*|ahorras\s*|ahorra\s*|save\s*|savings?\s*|ahorro\s*|descuento\s*|discount\s*|you\s+save\s*)$/i.test(
+    before.trim()
+  );
+}
+
+/**
+ * Extrae precios que aparecen en contexto explícito de moneda: "2.499 €", "Desde 4.199 €", etc.
+ * Excluye: "X €/mes", "Ahorra hasta X €", "Ahorras X €", "Save X €". No modifica el valor extraído.
+ */
+function getPricesFromExplicitCurrencyContext(cardText: string): number[] {
+  const numbers: number[] = [];
+  let m: RegExpExecArray | null;
+  const re = new RegExp(PRICE_WITH_CURRENCY_REGEX.source, "gi");
+  while ((m = re.exec(cardText)) !== null) {
+    if (isSavingsContext(cardText, m.index)) continue;
+    const parsed = normalizePriceFromString(m[1]);
+    if (parsed != null && parsed >= MIN_REASONABLE_PRICE && parsed < 100_000) {
+      numbers.push(parsed);
+    }
+  }
+  return numbers;
+}
+
+/**
+ * Extrae todos los números que parecen precios en el texto de la card.
+ * Excluye cuotas mensuales (ej. "30 €/mes") y devuelve candidatos para elegir el precio principal.
+ */
+function getAllPricesFromCardText(cardText: string): number[] {
+  const numbers: number[] = [];
+  let m: RegExpExecArray | null;
+  const re = new RegExp(PRICE_NUMBER_REGEX.source, "g");
+  while ((m = re.exec(cardText)) !== null) {
+    if (isMonthlyPaymentContext(cardText, m.index, m[1].length)) continue;
+    const parsed = normalizePriceFromString(m[1]);
+    if (
+      parsed != null &&
+      parsed >= MIN_REASONABLE_PRICE &&
+      parsed < 100_000
+    ) {
+      numbers.push(parsed);
+    }
+  }
+  return numbers;
+}
+
+/**
+ * Devuelve el precio principal de la card.
+ * 1) Prioriza números en contexto explícito de precio ("X.XXX €"), para no confundir con códigos (RX810).
+ * 2) Entre esos, usa el mínimo con valor >= MIN_MAIN_PRICE_EUR si hay (precio de oferta, no tachado).
+ * 3) Si no hay ningún precio explícito con €/EUR, hace fallback a todos los números de la card (comportamiento anterior).
+ */
+function getMainPriceFromCardText(cardText: string): number | null {
+  const explicitPrices = getPricesFromExplicitCurrencyContext(cardText);
+  const candidates =
+    explicitPrices.length > 0 ? explicitPrices : getAllPricesFromCardText(cardText);
+  if (candidates.length === 0) return null;
+  const mainPrices = candidates.filter((p) => p >= MIN_MAIN_PRICE_EUR);
+  const toUse = mainPrices.length > 0 ? mainPrices : candidates;
+  return Math.min(...toUse);
 }
 
 /**
@@ -196,11 +324,21 @@ function extractProductFromCard(
   pageUrl: string
 ): (Product & { confidenceScore: number }) | null {
   const name = firstText($, NAME_SELECTORS, card);
-  const priceRaw = firstText($, PRICE_SELECTORS, card);
-  const price = priceRaw != null ? normalizePriceFromString(priceRaw) : null;
-  if (price == null) return null;
+  const cardText = card.text() ?? "";
 
-  const size = firstText($, SIZE_SELECTORS, card);
+  let price: number | null = getMainPriceFromCardText(cardText);
+  if (price == null) {
+    const priceRaw = firstText($, PRICE_SELECTORS, card);
+    price = priceRaw != null ? normalizePriceFromString(priceRaw) : null;
+  }
+  if (price == null || price <= 0) return null;
+
+  let size = firstText($, SIZE_SELECTORS, card)?.trim();
+  if (!size) {
+    const sizeFromAvail = getSizeFromAvailabilityText(cardText);
+    if (sizeFromAvail) size = sizeFromAvail;
+  }
+
   const color = firstText($, COLOR_SELECTORS, card);
   const image = firstAttr($, IMAGE_SELECTORS, "src", card);
   const link = card.find("a[href]").first().attr("href");

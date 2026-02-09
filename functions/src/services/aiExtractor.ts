@@ -7,6 +7,7 @@
 
 import { parse } from "node-html-parser";
 import type { Criteria, Product } from "../types";
+import type { CriteriaMatch } from "./criteriaAnalyzer";
 
 const LOG_PREFIX = "[AiExtractor]";
 
@@ -47,7 +48,7 @@ export function htmlToPlainText(html: string, maxChars: number = MAX_INPUT_CHARS
  * Indica si el fallback por IA está disponible (Vertex o Gemini API key).
  */
 export function isAiExtractionAvailable(): boolean {
-  const project = process.env.PROJECT_ID ?? process.env.PROJECT_ID;
+  const project = process.env.PROJECT_ID;
   const location = process.env.VERTEX_AI_LOCATION;
   const apiKey = process.env.GEMINI_API_KEY;
   const disabled = process.env.GEMINI_EXTRACTION_ENABLED === "false";
@@ -68,6 +69,7 @@ export function isCriteriaExtractionAvailable(): boolean {
 /** Estructura esperada en la respuesta JSON de criterios. */
 interface AiCriteriaRaw {
   priceMax?: number;
+  priceMin?: number;
   size?: string;
   color?: string;
   productTypeHint?: string;
@@ -83,12 +85,13 @@ ${urlContext}
 
 Extrae y devuelve ÚNICAMENTE un JSON con estos campos (solo los que puedas inferir; omite los que no apliquen):
 - priceMax: número (precio máximo en euros que el usuario está dispuesto a pagar).
+- priceMin: número (precio mínimo razonable en euros). Infiérelo solo cuando el tipo de producto lo permita: si el usuario busca bicicletas, electrónica, portátiles, etc., indica un mínimo que evite falsos positivos (cuotas mensuales, números de modelo). Ej. bicicletas: 100, zapatillas: 15, portátiles: 200. No lo incluyas si el tipo de producto no está claro o si puede haber ofertas muy baratas válidas.
 - size: string (talla deseada, ej. "S", "M", "L", "42").
 - color: string (color deseado).
 - productTypeHint: string (tipo de producto en una palabra o pocas, ej. "bicicletas", "zapatillas").
 
 Responde solo con el JSON, sin markdown ni explicaciones. Si no hay ningún criterio claro, devuelve {}.
-Ejemplo: {"priceMax":2000,"size":"L","productTypeHint":"bicicletas"}`;
+Ejemplo: {"priceMax":2000,"priceMin":100,"size":"L","productTypeHint":"bicicletas"}`;
 }
 
 function parseCriteriaResponse(rawText: string): Criteria {
@@ -105,6 +108,7 @@ function parseCriteriaResponse(rawText: string): Criteria {
   const raw = parsed as AiCriteriaRaw;
   const criteria: Criteria = {};
   if (typeof raw.priceMax === "number" && raw.priceMax >= 0) criteria.priceMax = raw.priceMax;
+  if (typeof raw.priceMin === "number" && raw.priceMin >= 0) criteria.priceMin = raw.priceMin;
   if (typeof raw.size === "string" && raw.size.trim()) criteria.size = raw.size.trim();
   if (typeof raw.color === "string" && raw.color.trim()) criteria.color = raw.color.trim();
   if (typeof raw.productTypeHint === "string" && raw.productTypeHint.trim()) {
@@ -130,7 +134,7 @@ export async function extractCriteriaFromInstruction(
     return {};
   }
   const prompt = buildCriteriaPrompt(instruction, pageUrl);
-  const projectId = process.env.PROJECT_ID ?? process.env.PROJECT_ID;
+  const projectId = process.env.PROJECT_ID;
   const location = process.env.VERTEX_AI_LOCATION;
   const apiKey = process.env.GEMINI_API_KEY;
   try {
@@ -143,6 +147,218 @@ export async function extractCriteriaFromInstruction(
     console.error(LOG_PREFIX, "Error extrayendo criterios con IA", { error: message });
     return {};
   }
+}
+
+/** Máximo de productos a enviar al modelo en el filtro por tipo (control de tokens). */
+const MAX_PRODUCTS_FOR_TYPE_FILTER = 150;
+
+/**
+ * Indica si el filtro por tipo de producto (IA) está disponible.
+ */
+export function isProductTypeFilterAvailable(): boolean {
+  const disabled = process.env.GEMINI_PRODUCT_TYPE_FILTER_ENABLED === "false";
+  if (disabled) return false;
+  return isAiExtractionAvailable();
+}
+
+function buildProductTypeFilterPrompt(
+  productSummaries: string[],
+  productTypeHint: string,
+  instruction?: string
+): string {
+  const instructionLine = instruction
+    ? `Instrucción del usuario: "${instruction}"\n\n`
+    : "";
+  return `Eres un asistente que filtra productos por categoría/tipo. ${instructionLine}Tipo de producto que interesa: "${productTypeHint}".
+
+A continuación se listan productos extraídos de una página (nombre | precio | URL). Algunos son del tipo indicado y otros son accesorios, componentes o productos de otra categoría que aparecen en la misma página.
+
+Lista de productos (nombre | precio EUR | URL):
+---
+${productSummaries.join("\n")}
+---
+
+Devuelve ÚNICAMENTE un JSON array con las URLs exactas de los productos que SÍ corresponden al tipo "${productTypeHint}" (producto principal, no accesorios ni componentes sueltos). Si ninguno coincide, devuelve [].
+Sin markdown, sin explicaciones. Ejemplo: ["https://example.com/bike-1","https://example.com/bike-2"]`;
+}
+
+function parseProductTypeFilterResponse(rawText: string): string[] {
+  const trimmed = rawText.trim();
+  const jsonStr = trimmed.replace(/^```json\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    console.warn(LOG_PREFIX, "Respuesta de IA (filtro tipo) no es JSON válido", { preview: trimmed.slice(0, 200) });
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const urls: string[] = [];
+  for (const item of parsed) {
+    if (typeof item === "string" && item.trim()) urls.push(item.trim());
+  }
+  return urls;
+}
+
+/**
+ * Filtra productos por tipo usando IA: una llamada acotada por ejecución.
+ * Solo conserva productos que la IA considera del tipo productTypeHint (p. ej. bicicletas y no pedales/sillines).
+ *
+ * @param products - Lista de productos extraídos (pueden ser bicis, componentes, etc.)
+ * @param productTypeHint - Tipo deseado (ej. "bicicletas", "zapatillas")
+ * @param instruction - Instrucción original del usuario (contexto opcional)
+ * @returns Subconjunto de products que coinciden con el tipo; o todos si IA no disponible o falla
+ */
+export async function filterProductsByType<T extends Product>(
+  products: T[],
+  productTypeHint: string,
+  instruction?: string
+): Promise<T[]> {
+  const hint = productTypeHint.trim();
+  if (!hint || products.length === 0) return products;
+  if (!isProductTypeFilterAvailable()) {
+    console.log(LOG_PREFIX, "Filtro por tipo no disponible (IA desactivada o no configurada); se mantienen todos los productos");
+    return products;
+  }
+
+  const toSend = products.slice(0, MAX_PRODUCTS_FOR_TYPE_FILTER);
+  const summaries = toSend.map((p) => `${p.name} | ${p.price} ${p.currency} | ${p.url}`);
+  const prompt = buildProductTypeFilterPrompt(summaries, hint, instruction);
+
+  const projectId = process.env.PROJECT_ID;
+  const location = process.env.VERTEX_AI_LOCATION;
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  let rawText: string;
+  try {
+    rawText = await callAiWithRetryOn429(projectId, location, apiKey, prompt);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(LOG_PREFIX, "Error en filtro por tipo de producto", { error: message });
+    return products;
+  }
+
+  const allowedUrls = new Set(parseProductTypeFilterResponse(rawText));
+  if (allowedUrls.size === 0) {
+    console.log(LOG_PREFIX, "IA no devolvió URLs para el tipo; se mantienen todos los productos");
+    return products;
+  }
+
+  const filtered = products.filter((p) => allowedUrls.has(p.url));
+  console.log(LOG_PREFIX, "Filtro por tipo aplicado", {
+    productTypeHint: hint,
+    total: products.length,
+    kept: filtered.length,
+  });
+  return filtered;
+}
+
+/** Máximo de matches a enviar al modelo en el filtro de relevancia. */
+const MAX_MATCHES_FOR_RELEVANCE_FILTER = 80;
+
+/**
+ * Indica si el filtro de relevancia (IA) está disponible.
+ */
+export function isRelevanceFilterAvailable(): boolean {
+  const disabled = process.env.GEMINI_RELEVANCE_FILTER_ENABLED === "false";
+  if (disabled) return false;
+  return isAiExtractionAvailable();
+}
+
+function buildRelevanceFilterPrompt(
+  matches: CriteriaMatch[],
+  criteria: Criteria,
+  instruction: string
+): string {
+  const criteriaStr = JSON.stringify(criteria);
+  const lines = matches.map(
+    (m, i) =>
+      `${i + 1}. ${m.product.name} | ${m.product.price} ${m.product.currency} | talla: ${m.product.size ?? "—"} | ${m.product.url}`
+  );
+  return `Eres un asistente que filtra resultados de un tracker de ofertas. El usuario definió su búsqueda en lenguaje natural y el sistema ha encontrado candidatos; algunos son falsos positivos (precio erróneo, talla incorrecta, componente en vez de producto completo, etc.).
+
+Instrucción del usuario: "${instruction}"
+Criterios extraídos: ${criteriaStr}
+
+Lista de candidatos (nombre | precio | talla | URL):
+---
+${lines.join("\n")}
+---
+
+Devuelve ÚNICAMENTE un JSON array con las URLs exactas de los productos que SÍ coinciden de verdad con lo que busca el usuario:
+- Precio debe ser el precio real del producto (no una cuota mensual ni un número de modelo).
+- Talla debe coincidir si el usuario la pidió (ej. si pide L, no incluir XL ni productos sin talla indicada).
+- Debe ser el tipo de producto indicado (ej. bicicleta completa, no un componente o accesorio).
+Si ninguno cumple de verdad, devuelve [].
+Sin markdown, sin explicaciones. Ejemplo: ["https://example.com/product-1","https://example.com/product-2"]`;
+}
+
+function parseRelevanceFilterResponse(rawText: string): string[] {
+  const trimmed = rawText.trim();
+  const jsonStr = trimmed.replace(/^```json\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    console.warn(LOG_PREFIX, "Respuesta de IA (filtro relevancia) no es JSON válido", { preview: trimmed.slice(0, 200) });
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const urls: string[] = [];
+  for (const item of parsed) {
+    if (typeof item === "string" && item.trim()) urls.push(item.trim());
+  }
+  return urls;
+}
+
+/**
+ * Filtra matches con IA para quedarse solo con los que realmente coinciden con la intención del usuario.
+ * Elimina falsos positivos: precios erróneos (cuotas, números de modelo), tallas incorrectas, componentes vs producto completo.
+ *
+ * @param matches - Matches candidatos (ya pasaron criterios numéricos)
+ * @param criteria - Criterios del tracking
+ * @param instruction - Instrucción en lenguaje natural del usuario
+ * @returns Subconjunto de matches que la IA considera realmente relevantes
+ */
+export async function filterMatchesByRelevance(
+  matches: CriteriaMatch[],
+  criteria: Criteria,
+  instruction: string
+): Promise<CriteriaMatch[]> {
+  if (matches.length === 0) return [];
+  if (!isRelevanceFilterAvailable()) {
+    console.log(LOG_PREFIX, "Filtro de relevancia no disponible; se mantienen todos los matches");
+    return matches;
+  }
+
+  const toSend = matches.slice(0, MAX_MATCHES_FOR_RELEVANCE_FILTER);
+  const prompt = buildRelevanceFilterPrompt(toSend, criteria, instruction);
+
+  const projectId = process.env.PROJECT_ID;
+  const location = process.env.VERTEX_AI_LOCATION;
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  let rawText: string;
+  try {
+    rawText = await callAiWithRetryOn429(projectId, location, apiKey, prompt);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(LOG_PREFIX, "Error en filtro de relevancia", { error: message });
+    return matches;
+  }
+
+  const allowedUrls = new Set(parseRelevanceFilterResponse(rawText));
+  if (allowedUrls.size === 0) {
+    console.log(LOG_PREFIX, "IA no devolvió URLs en filtro de relevancia; se mantienen todos los matches");
+    return matches;
+  }
+
+  const filtered = matches.filter((m) => allowedUrls.has(m.product.url));
+  console.log(LOG_PREFIX, "Filtro de relevancia aplicado", {
+    total: matches.length,
+    kept: filtered.length,
+  });
+  return filtered;
 }
 
 /**
@@ -161,7 +377,8 @@ ${pageText}
 
 Instrucciones:
 - Extrae todos los productos que identifiques (nombre, precio, moneda, y si aparecen: talla, color, URL del producto, URL de imagen).
-- El precio debe ser un número (sin símbolo de moneda). Si la moneda no se indica, usa "EUR".
+- Precio: usa ÚNICAMENTE el precio de venta actual del producto (el que se paga por el artículo), nunca el "ahorro" ni "Ahorra hasta X €" ni "Ahorras X €". Busca el precio principal (ej. "Desde 4.199 €", "2.499 €") y devuélvelo tal cual. No uses precio tachado, ni original, ni dígitos de códigos (ej. "810" en "RX810"). No inventes ni redondees: el número debe coincidir exactamente con lo que muestra la página. Si la moneda no se indica, usa "EUR".
+- Talla: si en el texto del producto aparece disponibilidad por talla (ej. "Disponible para comprar en L", "Solo disponible en talla L", "talla L | XL"), extrae esa talla (o la primera si hay varias) en el campo size.
 - Si solo hay un producto y no tiene URL propia, usa la URL de la página: "${pageUrl}".
 - Responde ÚNICAMENTE con un JSON válido: un array de objetos. Sin markdown, sin explicaciones.
 - Cada objeto debe tener: name (string), price (number), currency (string), url (string). Opcionales: size, color, image (strings).
@@ -346,7 +563,7 @@ export async function extractProductsWithAi(
   }
 
   const prompt = buildExtractionPrompt(pageText, pageUrl);
-  const projectId = process.env.PROJECT_ID ?? process.env.PROJECT_ID;
+  const projectId = process.env.PROJECT_ID;
   const location = process.env.VERTEX_AI_LOCATION;
   const apiKey = process.env.GEMINI_API_KEY;
 

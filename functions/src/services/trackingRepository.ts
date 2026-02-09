@@ -31,14 +31,13 @@ let adminInitialized = false;
 
 /**
  * Inicializa Firebase Admin (idempotente).
- * Si PROJECT_ID o PROJECT_ID están definidos, se usa ese proyecto
+ * Si PROJECT_ID está definido, se usa ese proyecto
  * (evita usar el proyecto de la cuenta de servicio cuando se ejecutan scripts en local).
  */
 export function initializeFirebaseAdmin(): void {
   if (adminInitialized) return;
   if (admin.apps.length === 0) {
-    const projectId =
-      process.env.PROJECT_ID ?? process.env.PROJECT_ID;
+    const projectId = process.env.PROJECT_ID;
     admin.initializeApp(projectId ? { projectId } : undefined);
   }
   adminInitialized = true;
